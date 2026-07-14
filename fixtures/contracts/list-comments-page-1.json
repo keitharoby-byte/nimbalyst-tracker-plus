@@ -1,0 +1,29 @@
+{
+  "tracker": {
+    "id": "tracker-one",
+    "issueKey": "NIM-1",
+    "title": "Synthetic tracker",
+    "archived": false
+  },
+  "comments": [
+    {
+      "id": "comment-new",
+      "body": "Most recent synthetic comment",
+      "createdAt": "2026-07-14T12:01:00.000Z",
+      "updatedAt": null,
+      "authorLabel": "Fixture Author",
+      "truncated": false
+    }
+  ],
+  "page": {
+    "limit": 1,
+    "returned": 1,
+    "hasMore": true,
+    "nextCursor": "opaque"
+  },
+  "source": {
+    "backend": "sqlite",
+    "mode": "read-only",
+    "schemaAdapter": "tracker-items-data-comments-v1"
+  }
+}

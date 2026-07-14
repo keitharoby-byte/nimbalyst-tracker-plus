@@ -1,0 +1,23 @@
+CREATE TABLE tracker_items (
+  id TEXT PRIMARY KEY,
+  issue_number INTEGER,
+  issue_key TEXT,
+  type TEXT NOT NULL,
+  data TEXT NOT NULL,
+  workspace TEXT NOT NULL,
+  document_path TEXT,
+  line_number INTEGER,
+  content TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  archived_at TEXT,
+  source TEXT DEFAULT 'inline',
+  source_ref TEXT,
+  type_tags TEXT NOT NULL DEFAULT '[]',
+  sync_status TEXT DEFAULT 'local',
+  sync_id INTEGER,
+  body_version INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
+  created TEXT NOT NULL,
+  updated TEXT NOT NULL,
+  last_indexed TEXT NOT NULL
+);

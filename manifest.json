@@ -1,0 +1,25 @@
+{
+  "id": "com.prediclear.nimbalyst-native-tracker-comments",
+  "name": "Native Tracker Comments",
+  "version": "0.1.0",
+  "description": "Read native Nimbalyst tracker comments through workspace-scoped MCP tools.",
+  "author": "PrediClear",
+  "main": "dist/index.js",
+  "apiVersion": "1.0.0",
+  "defaultEnabled": false,
+  "contributions": {
+    "backendModules": [
+      {
+        "id": "native-tracker-comments-backend",
+        "entry": "dist/backend.js",
+        "runtime": "utility-process",
+        "permissions": ["mcp-server-register"],
+        "enablement": {
+          "default": "disabled",
+          "promptOn": "firstUse",
+          "purpose": "Read native tracker comments for the current workspace from Nimbalyst's local SQLite database in read-only mode and expose them to authorized AI agents as MCP tools. This module never writes tracker data."
+        }
+      }
+    ]
+  }
+}

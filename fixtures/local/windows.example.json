@@ -1,0 +1,14 @@
+{
+  "name": "windows",
+  "host": {
+    "productVersion": "0.68.1.0",
+    "fileVersion": "0.36.5",
+    "apiVersion": "1.0.0"
+  },
+  "sdk": "0.2.2",
+  "platform": "win32",
+  "python": ">=3.14 <3.15",
+  "workspacePath": "${NIMBALYST_WORKSPACE}",
+  "databasePath": "${NIMBALYST_SQLITE_PATH}",
+  "expectedBackend": "sqlite"
+}

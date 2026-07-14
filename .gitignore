@@ -1,0 +1,7 @@
+node_modules/
+dist/
+release/
+.agents/
+*.pyc
+__pycache__/
+.local/
