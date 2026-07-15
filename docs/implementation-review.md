@@ -9,7 +9,7 @@ been implemented without changing its trust boundary.
    `database-backend.json` selection and the installed tracker schema.
 2. The installed SDK marks its PGLite `host.data.query()` surface as unstable
    for the native SQLite transition. Direct read-only SQLite access behind a
-   consent-gated backend module remains the appropriate version 0.1 boundary.
+   consent-gated backend module remains the appropriate version 0.3 boundary.
 3. Nimbalyst's installed `nimbalyst-memory` backend confirms the supported MCP
    integration pattern: call `ctx.services.registerMcpTools()` during backend
    activation and return handlers under `methods`.
@@ -29,10 +29,17 @@ been implemented without changing its trust boundary.
   which coordination record a separate factory process considers canonical.
 - The external NAD-001 record remains unchanged. Implementation authorization
   does not silently rewrite its governance status.
+- Timeline and Markdown generation write ordinary workspace files only. They do
+  not write tracker rows or bypass Nimbalyst's relationship validation.
+- `timeline-item`, `milestone`, and `timeline-link` use shipped field types and
+  date/status roles. Existing built-in tracker schemas are not overridden.
+- `timeline-link` records hold one source/type/target edge. Target-side
+  backlinks and inverse labels are projection queries, not duplicated truth.
 
 ## Contract notes
 
-Both MCP tools accept `trackerId`, `limit`, `cursor`, `since`, and `order`.
-Unknown properties are rejected. The backend adds the active workspace path
-after validation, so an MCP caller cannot override it. Structured failures use
-stable error codes and never include database paths or tracker content.
+Comment tools accept `trackerId`, `limit`, `cursor`, `since`, and `order`.
+Timeline/report tools accept bounded filters plus a workspace-relative output
+file. Unknown properties are rejected. The backend adds the active workspace
+path after validation, so an MCP caller cannot override it. Structured failures
+use stable error codes and never include database paths or tracker content.

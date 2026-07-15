@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_ADAPTER = "tracker-items-data-comments-v1"
+SCHEMA_ADAPTER = "tracker-items-normalized-timeline-v2"
 REQUIRED_COLUMNS = (
     "id",
     "issue_key",
@@ -24,6 +24,10 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
 MAX_COMMENT_CHARS = 20_000
 MAX_TRACKER_BODY_CHARS = 100_000
+DEFAULT_TIMELINE_ITEMS = 300
+MAX_TIMELINE_ITEMS = 500
+DEFAULT_REPORT_LOOKAHEAD_DAYS = 30
+MAX_REPORT_LOOKAHEAD_DAYS = 365
 MAX_RESULT_BYTES = 500 * 1024
 MAX_INPUT_LINE_BYTES = 64 * 1024
 MAX_OUTPUT_LINE_BYTES = 512 * 1024

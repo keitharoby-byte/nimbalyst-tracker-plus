@@ -1,0 +1,208 @@
+type: timeline-item
+displayName: Timeline Item
+displayNamePlural: Timeline Items
+icon: view_timeline
+color: '#0ea5e9'
+idPrefix: tli
+idFormat: ulid
+primaryCapable: true
+modes:
+  inline: true
+  fullDocument: false
+sync:
+  mode: shared
+  scope: project
+fields:
+  - name: title
+    type: string
+    required: true
+    displayInline: true
+  - name: status
+    type: select
+    required: true
+    default: planned
+    displayInline: true
+    options:
+      - value: planned
+        label: Planned
+        icon: event
+        color: '#64748b'
+      - value: in-progress
+        label: In Progress
+        icon: motion_photos_on
+        color: '#3b82f6'
+      - value: in-review
+        label: In Review
+        icon: rate_review
+        color: '#8b5cf6'
+      - value: waiting
+        label: Waiting
+        icon: hourglass_top
+        color: '#f59e0b'
+      - value: done
+        label: Done
+        icon: task_alt
+        color: '#10b981'
+  - name: startDate
+    type: date
+    displayInline: true
+  - name: dueDate
+    type: date
+    displayInline: true
+  - name: forecastDate
+    type: date
+    displayInline: true
+  - name: progress
+    type: number
+    min: 0
+    max: 100
+    default: 0
+    displayInline: true
+  - name: scheduleHealth
+    type: select
+    default: on-track
+    displayInline: true
+    options:
+      - value: on-track
+        label: On Track
+        color: '#22c55e'
+      - value: at-risk
+        label: At Risk
+        color: '#f59e0b'
+      - value: late
+        label: Late
+        color: '#ef4444'
+  - name: executionConstraint
+    type: select
+    default: clear
+    displayInline: true
+    options:
+      - value: clear
+        label: Clear
+        color: '#64748b'
+      - value: waiting
+        label: Waiting
+        color: '#f59e0b'
+      - value: blocked
+        label: Blocked
+        color: '#ef4444'
+      - value: paused
+        label: Paused
+        color: '#8b5cf6'
+  - name: impact
+    type: number
+    min: 1
+    max: 5
+    displayInline: true
+  - name: likelihood
+    type: number
+    min: 1
+    max: 5
+    displayInline: true
+  - name: riskDurability
+    type: select
+    options:
+      - value: transient
+        label: Transient
+      - value: recurring
+        label: Recurring
+      - value: structural
+        label: Structural
+      - value: external
+        label: External
+  - name: recoverability
+    type: select
+    options:
+      - value: easy
+        label: Easy
+      - value: moderate
+        label: Moderate
+      - value: hard
+        label: Hard
+  - name: evidenceConfidence
+    type: select
+    options:
+      - value: low
+        label: Low
+      - value: medium
+        label: Medium
+      - value: high
+        label: High
+  - name: technicalUncertainty
+    type: select
+    options:
+      - value: low
+        label: Low
+      - value: medium
+        label: Medium
+      - value: high
+        label: High
+      - value: critical
+        label: Critical
+  - name: capacityPressure
+    type: select
+    options:
+      - value: low
+        label: Low
+      - value: medium
+        label: Medium
+      - value: high
+        label: High
+      - value: critical
+        label: Critical
+  - name: launchScope
+    type: select
+    default: not-launch-scoped
+    options:
+      - value: not-launch-scoped
+        label: Not launch scoped
+      - value: launch
+        label: Launch scoped
+  - name: priority
+    type: select
+    displayInline: true
+    options:
+      - value: low
+        label: Low
+      - value: medium
+        label: Medium
+      - value: high
+        label: High
+      - value: critical
+        label: Critical
+  - name: owner
+    type: user
+    displayInline: true
+  - name: gate
+    type: string
+  - name: projectStateRevision
+    type: string
+  - name: summary
+    type: text
+  - name: tags
+    type: array
+    itemType: string
+roles:
+  title: title
+  workflowStatus: status
+  priority: priority
+  assignee: owner
+  tags: tags
+  startDate: startDate
+  dueDate: dueDate
+  progress: progress
+inlineTemplate: '{icon} {title} {status} {scheduleHealth} {executionConstraint} {startDate} → {dueDate}'
+tableView:
+  defaultColumns:
+    - title
+    - status
+    - scheduleHealth
+    - executionConstraint
+    - startDate
+    - dueDate
+    - forecastDate
+    - progress
+    - owner
+  sortable: true
+  filterable: true
+  exportable: true

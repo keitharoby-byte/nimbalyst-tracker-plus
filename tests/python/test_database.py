@@ -209,6 +209,91 @@ class NativeTrackerReaderTests(unittest.TestCase):
             count = connection.execute("SELECT COUNT(*) FROM tracker_items").fetchone()[0]
         self.assertEqual(count, 2)
 
+    def test_timeline_snapshot_projects_normalized_relationships_and_dimensions(self) -> None:
+        self._insert_timeline_items()
+
+        result = self.reader.timeline_snapshot(
+            {
+                "workspacePath": "C:\\Workspace\\One",
+                "includeUnscheduled": True,
+                "maxItems": 100,
+            }
+        )
+
+        self.assertEqual(
+            {item["id"] for item in result["items"]},
+            {"milestone-one", "timeline-one", "tracker-one"},
+        )
+        self.assertEqual(result["milestones"][0]["issueKey"], "NIM-10")
+        relationship_types = {edge["relationshipType"] for edge in result["relationships"]}
+        self.assertEqual(
+            relationship_types,
+            {"depends-on", "contributes-to", "reviews", "evidences", "implements", "related"},
+        )
+        self.assertEqual(len(result["relationships"]), 6)
+        timeline = next(item for item in result["items"] if item["id"] == "timeline-one")
+        self.assertEqual(timeline["workflow"], "in-progress")
+        self.assertEqual(timeline["executionConstraint"], "blocked")
+        self.assertEqual(timeline["riskLevel"], "critical")
+        self.assertEqual(timeline["primaryMilestoneId"], "milestone-one")
+        self.assertTrue(timeline["isCritical"])
+        self.assertEqual(result["source"]["projectStateRevision"], "fixture-r7")
+        self.assertFalse(any(finding["severity"] == "error" for finding in result["validation"]))
+        serialized = json.dumps(result)
+        self.assertNotIn("must-not-leak", serialized)
+        self.assertNotIn("Old synthetic comment", serialized)
+        self.assertNotIn("Most recent synthetic comment", serialized)
+
+    def test_milestone_report_surfaces_overdue_and_blocked_work(self) -> None:
+        self._insert_timeline_items()
+
+        result = self.reader.milestone_report(
+            {
+                "workspacePath": "C:\\Workspace\\One",
+                "milestoneId": "NIM-10",
+                "asOf": "2026-08-01",
+                "lookaheadDays": 30,
+                "maxItems": 100,
+            }
+        )
+
+        section = result["milestones"][0]
+        self.assertEqual(section["health"], "late")
+        self.assertEqual(section["scheduleHealth"], "late")
+        self.assertEqual(section["riskLevel"], "critical")
+        self.assertEqual(section["deliverableCount"], 1)
+        self.assertEqual([item["id"] for item in section["overdue"]], ["timeline-one"])
+        self.assertEqual([item["id"] for item in section["blockedItems"]], ["timeline-one"])
+        self.assertEqual(len(section["activeDependencies"]), 1)
+        self.assertIn("# Milestone report", result["markdown"])
+        self.assertIn("Launch milestone", result["markdown"])
+        self.assertIn("Schedule health: **late**", result["markdown"])
+
+    def test_hard_dependency_cycles_are_validation_errors(self) -> None:
+        self._insert_timeline_items()
+        self._insert_link(
+            "link-cycle",
+            "NIM-18",
+            "tracker-one",
+            "timeline-one",
+            "depends-on",
+            hardness="hard-serial",
+            clearing_condition="Timeline proof is accepted.",
+        )
+
+        result = self.reader.timeline_snapshot(
+            {
+                "workspacePath": "C:\\Workspace\\One",
+                "includeUnscheduled": True,
+                "maxItems": 100,
+            }
+        )
+
+        self.assertEqual(set(result["criticalPath"]["cycleItemIds"]), {"tracker-one", "timeline-one"})
+        cycles = [finding for finding in result["validation"] if finding["code"] == "hard-dependency-cycle"]
+        self.assertEqual(len(cycles), 1)
+        self.assertEqual(cycles[0]["severity"], "error")
+
     def _replace_comments(self, comments: list[dict[str, object]]) -> None:
         with closing(sqlite3.connect(self.db_path)) as connection:
             raw = connection.execute(
@@ -219,6 +304,127 @@ class NativeTrackerReaderTests(unittest.TestCase):
             connection.execute(
                 "UPDATE tracker_items SET data = ? WHERE id = 'tracker-one'",
                 (json.dumps(data),),
+            )
+            connection.commit()
+
+    def _insert_timeline_items(self) -> None:
+        milestone = {
+            "title": "Launch milestone",
+            "status": "in-progress",
+            "startDate": "2026-07-01",
+            "targetDate": "2026-08-15",
+            "forecastDate": "2026-08-20",
+            "progress": 50,
+            "scheduleHealth": "on-track",
+            "executionConstraint": "clear",
+            "impact": 2,
+            "likelihood": 2,
+            "projectStateRevision": "fixture-r7",
+        }
+        timeline = {
+            "title": "Ship timeline",
+            "status": "in-progress",
+            "startDate": "2026-07-10",
+            "dueDate": "2026-07-20",
+            "forecastDate": "2026-07-23",
+            "progress": 25,
+            "scheduleHealth": "on-track",
+            "executionConstraint": "blocked",
+            "impact": 4,
+            "likelihood": 3,
+            "riskDurability": "structural",
+            "recoverability": "hard",
+            "launchScope": "launch",
+            "projectStateRevision": "fixture-r7",
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            for tracker_id, issue_key, tracker_type, data, tags in (
+                ("milestone-one", "NIM-10", "milestone", milestone, '["milestone"]'),
+                ("timeline-one", "NIM-11", "timeline-item", timeline, '["timeline-item"]'),
+            ):
+                connection.execute(
+                    """
+                    INSERT INTO tracker_items (
+                      id, issue_number, issue_key, type, data, workspace, content,
+                      archived, type_tags, deleted_at, created, updated, last_indexed
+                    ) VALUES (?, 10, ?, ?, ?, ?, '', 0, ?, NULL, ?, ?, ?)
+                    """,
+                    (
+                        tracker_id,
+                        issue_key,
+                        tracker_type,
+                        json.dumps(data),
+                        "C:\\Workspace\\One",
+                        tags,
+                        "2026-07-01T00:00:00.000Z",
+                        "2026-07-02T00:00:00.000Z",
+                        "2026-07-02T00:00:00.000Z",
+                    ),
+                )
+            connection.commit()
+        self._insert_link(
+            "link-dependency", "NIM-12", "timeline-one", "tracker-one", "depends-on",
+            hardness="hard-serial", clearing_condition="Harness proof is accepted.",
+        )
+        self._insert_link(
+            "link-contribution", "NIM-13", "timeline-one", "milestone-one", "contributes-to",
+            contribution_role="primary",
+        )
+        self._insert_link("link-review", "NIM-14", "timeline-one", "milestone-one", "reviews", with_review_evidence=True)
+        self._insert_link("link-evidence", "NIM-15", "tracker-one", "timeline-one", "evidences")
+        self._insert_link("link-implementation", "NIM-16", "timeline-one", "tracker-one", "implements")
+        self._insert_link("link-related", "NIM-17", "timeline-one", "tracker-one", "related", directedness="symmetric")
+
+    def _insert_link(
+        self,
+        tracker_id: str,
+        issue_key: str,
+        source_id: str,
+        target_id: str,
+        relationship_type: str,
+        *,
+        hardness: str = "soft-coordination",
+        clearing_condition: str | None = None,
+        contribution_role: str = "secondary",
+        directedness: str = "directed",
+        with_review_evidence: bool = False,
+    ) -> None:
+        data = {
+            "title": f"{source_id} {relationship_type} {target_id}",
+            "status": "active",
+            "sourceItem": {"itemId": source_id},
+            "targetItem": {"itemId": target_id},
+            "relationshipType": relationship_type,
+            "directedness": directedness,
+            "dependencyMode": "finish-to-start",
+            "hardness": hardness,
+            "leadLagDays": 0,
+            "clearingCondition": clearing_condition,
+            "owner": "Fixture Owner",
+            "contributionRole": contribution_role,
+            "effectiveRevision": "fixture-r7",
+            "projectStateRevision": "fixture-r7",
+        }
+        if with_review_evidence:
+            data["entryEvidence"] = [{"itemId": "tracker-one"}]
+            data["exitEvidence"] = [{"itemId": "timeline-one"}]
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                """
+                INSERT INTO tracker_items (
+                  id, issue_number, issue_key, type, data, workspace, content,
+                  archived, type_tags, deleted_at, created, updated, last_indexed
+                ) VALUES (?, 20, ?, 'timeline-link', ?, ?, '', 0, '["timeline-link"]', NULL, ?, ?, ?)
+                """,
+                (
+                    tracker_id,
+                    issue_key,
+                    json.dumps(data),
+                    "C:\\Workspace\\One",
+                    "2026-07-03T00:00:00.000Z",
+                    "2026-07-03T00:00:00.000Z",
+                    "2026-07-03T00:00:00.000Z",
+                ),
             )
             connection.commit()
 

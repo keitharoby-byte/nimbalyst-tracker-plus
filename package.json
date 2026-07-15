@@ -1,6 +1,6 @@
 {
-  "name": "com-prediclear-nimbalyst-native-tracker-comments",
-  "version": "0.1.0",
+  "name": "com-prediclear-nimbalyst-tracker-plus",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,9 +10,13 @@
     "test": "npm run typecheck && npm run test:python",
     "verify:package": "node scripts/verify-package.mjs"
   },
+  "dependencies": {
+    "react": "18.3.1"
+  },
   "devDependencies": {
     "@nimbalyst/extension-sdk": "0.2.2",
     "@types/node": "^24.0.0",
+    "@types/react": "^18.3.0",
     "typescript": "^5.9.0",
     "vite": "^7.1.12"
   }
