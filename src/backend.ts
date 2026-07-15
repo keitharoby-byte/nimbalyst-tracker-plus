@@ -373,7 +373,7 @@ export async function activate(context: BackendContext): Promise<{
         title: typeof existing.title === 'string' ? existing.title : 'Tracker Timeline',
         view: existing.view && typeof existing.view === 'object'
           ? existing.view
-          : { mode: 'timeline', zoom: 'week', showUnscheduled: true, compactRows: true, fitToWidth: true },
+          : { mode: 'timeline', zoom: 'week', showUnscheduled: true, compactRows: true, fitToWidth: true, summaryRows: false },
         filters: {
           includeUnscheduled: params.includeUnscheduled,
           ...(params.from ? { from: params.from } : {}),

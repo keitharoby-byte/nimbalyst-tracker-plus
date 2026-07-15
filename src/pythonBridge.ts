@@ -151,7 +151,7 @@ export class PythonBridge {
 
   private async spawnCandidate(candidate: PythonCandidate, scriptPath: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(candidate.command, [...candidate.prefixArgs, '-I', scriptPath], {
+      const child = spawn(candidate.command, [...candidate.prefixArgs, '-I', '-B', scriptPath], {
         cwd: path.dirname(scriptPath),
         env: { ...process.env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1' },
         windowsHide: true,

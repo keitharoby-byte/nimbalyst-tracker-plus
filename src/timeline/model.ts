@@ -16,6 +16,17 @@ import type {
 
 const DAY_MS = 86_400_000;
 const COMPLETE_WORKFLOWS = new Set(['done', 'completed', 'achieved', 'closed', 'shipped', 'implemented']);
+const EXECUTABLE_TYPES = new Set([
+  'task',
+  'timeline-item',
+  'devops-item',
+  'prediclear-item',
+  'automation',
+  'mr',
+  'merge-request',
+  'pull-request',
+  'change-request',
+]);
 const RELATIONSHIP_TYPES = new Set<RelationshipType>([
   'depends-on',
   'contributes-to',
@@ -44,7 +55,7 @@ export function emptyTimelineDocument(): TimelineDocument {
   return {
     version: 2,
     title: 'Tracker Timeline',
-    view: { mode: 'timeline', zoom: 'week', showUnscheduled: true, compactRows: true, fitToWidth: true },
+    view: { mode: 'timeline', zoom: 'week', showUnscheduled: true, compactRows: true, fitToWidth: true, summaryRows: false },
     filters: { includeUnscheduled: true },
     snapshot: {
       generatedAt: null,
@@ -82,6 +93,7 @@ export function parseTimelineDocument(raw: string): TimelineDocument {
         .filter((edge): edge is TimelineRelationship => edge !== null)
     : [];
   for (const edge of relationships) edge.targetInSnapshot = itemIds.has(edge.targetId);
+  hydrateRelationshipDimensions(items, relationships);
   const validation = Array.isArray(rawSnapshot.validation)
     ? rawSnapshot.validation.map(parseFinding).filter((finding): finding is ValidationFinding => finding !== null)
     : [];
@@ -120,6 +132,7 @@ export function parseTimelineDocument(raw: string): TimelineDocument {
       showUnscheduled: view.showUnscheduled !== false,
       compactRows: view.compactRows !== false,
       fitToWidth: view.fitToWidth !== false,
+      summaryRows: view.summaryRows === true,
     },
     filters: {
       includeUnscheduled: filters.includeUnscheduled !== false,
@@ -152,6 +165,87 @@ export function isComplete(item: TimelineItem): boolean {
   return COMPLETE_WORKFLOWS.has(String(item.workflow ?? '').toLowerCase());
 }
 
+export function isActiveExecutableItem(item: TimelineItem): boolean {
+  if (isComplete(item) || item.primaryType === 'milestone') return false;
+  const types = new Set([item.primaryType, ...item.typeTags].map((value) => value.toLowerCase()));
+  return [...types].some((value) => EXECUTABLE_TYPES.has(value));
+}
+
+export function activeUnscheduledItems(items: TimelineItem[]): TimelineItem[] {
+  return items.filter((item) =>
+    isActiveExecutableItem(item)
+    && !item.startDate
+    && !item.dueDate
+    && !item.forecastDate);
+}
+
+export function primaryMilestoneParentIds(
+  items: TimelineItem[],
+  relationships: TimelineRelationship[],
+): Map<string, string> {
+  const visibleIds = new Set(items.map((item) => item.id));
+  const milestoneIds = new Set(
+    items.filter((item) => item.primaryType === 'milestone').map((item) => item.id),
+  );
+  const primaryParents = new Map<string, Set<string>>();
+  for (const edge of relationships) {
+    if (
+      edge.state !== 'active'
+      || edge.relationshipType !== 'contributes-to'
+      || !edge.primaryContribution
+      || !visibleIds.has(edge.sourceId)
+      || !milestoneIds.has(edge.targetId)
+    ) continue;
+    const parents = primaryParents.get(edge.sourceId) ?? new Set<string>();
+    parents.add(edge.targetId);
+    primaryParents.set(edge.sourceId, parents);
+  }
+
+  const result = new Map<string, string>();
+  for (const [itemId, parents] of primaryParents) {
+    if (parents.size === 1) result.set(itemId, [...parents][0]!);
+  }
+  return result;
+}
+
+export function orderByPrimaryMilestone(
+  items: TimelineItem[],
+  relationships: TimelineRelationship[],
+): TimelineItem[] {
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  const parentByItem = primaryMilestoneParentIds(items, relationships);
+
+  const childrenByMilestone = new Map<string, TimelineItem[]>();
+  for (const item of items) {
+    const parentId = parentByItem.get(item.id);
+    if (!parentId) continue;
+    const children = childrenByMilestone.get(parentId) ?? [];
+    children.push(item);
+    childrenByMilestone.set(parentId, children);
+  }
+
+  const placedIds = new Set<string>();
+  const result: TimelineItem[] = [];
+  const appendBranch = (item: TimelineItem): void => {
+    if (placedIds.has(item.id)) return;
+    placedIds.add(item.id);
+    result.push(item);
+    if (item.primaryType !== 'milestone') return;
+    for (const child of childrenByMilestone.get(item.id) ?? []) appendBranch(child);
+  };
+
+  const milestones = items.filter((item) => item.primaryType === 'milestone');
+  for (const milestone of milestones) {
+    const parentId = parentByItem.get(milestone.id);
+    if (!parentId || !itemById.has(parentId)) appendBranch(milestone);
+  }
+  // A second milestone pass safely emits any cyclic or otherwise malformed
+  // hierarchy once; validation can report the topology without duplicating rows.
+  for (const milestone of milestones) appendBranch(milestone);
+  for (const item of items) appendBranch(item);
+  return result;
+}
+
 export function itemReference(item: TimelineItem): string {
   return item.issueKey || item.id;
 }
@@ -167,7 +261,8 @@ export function milestoneSummaries(snapshot: TimelineSnapshot, now = new Date())
     const contributionEdges = snapshot.relationships.filter((edge) =>
       edge.relationshipType === 'contributes-to'
       && edge.targetId === milestone.id
-      && edge.state === 'active');
+      && edge.state === 'active'
+      && edge.primaryContribution);
     const deliverables = contributionEdges
       .map((edge) => itemsById.get(edge.sourceId))
       .filter((item): item is TimelineItem => Boolean(item));
@@ -260,8 +355,13 @@ function parseRelationship(raw: unknown): TimelineRelationship | null {
     milestone: 'contributes-to',
   };
   const relationshipType = enumValue(raw.relationshipType, RELATIONSHIP_TYPES)
+    ?? enumValue(raw.kind, RELATIONSHIP_TYPES)
     ?? (legacyKind ? legacyMap[legacyKind] : undefined);
   if (!relationshipType) return null;
+  const directedness = stringValue(raw.directedness);
+  const state = enumValue(raw.state, RELATIONSHIP_STATES)
+    ?? enumValue(raw.status, RELATIONSHIP_STATES)
+    ?? 'active';
   return {
     id: stringValue(raw.id) ?? `legacy:${raw.sourceId}:${relationshipType}:${raw.targetId}`,
     issueKey: stringValue(raw.issueKey),
@@ -273,23 +373,63 @@ function parseRelationship(raw: unknown): TimelineRelationship | null {
     targetTitle: stringValue(raw.targetTitle),
     targetType: stringValue(raw.targetType),
     relationshipType,
-    directed: raw.directed !== false && relationshipType !== 'related',
-    state: enumValue(raw.state, RELATIONSHIP_STATES) ?? 'active',
+    directed: raw.directed !== false && directedness !== 'symmetric' && relationshipType !== 'related',
+    state,
     dependencyMode: enumValue(raw.dependencyMode, DEPENDENCY_MODES) ?? (relationshipType === 'depends-on' ? 'finish-to-start' : null),
     hardness: enumValue(raw.hardness, HARDNESS_LEVELS),
     leadLagDays: finiteNumber(raw.leadLagDays) ?? 0,
     clearingCondition: stringValue(raw.clearingCondition),
     ownerLabel: stringValue(raw.ownerLabel),
-    primaryContribution: raw.primaryContribution === true,
-    entryEvidenceIds: stringArray(raw.entryEvidenceIds),
-    exitEvidenceIds: stringArray(raw.exitEvidenceIds),
-    evidenceSourceIds: stringArray(raw.evidenceSourceIds),
+    primaryContribution: raw.primaryContribution === true || raw.contributionRole === 'primary' || legacyKind === 'milestone',
+    entryEvidenceIds: relationshipItemIds(raw.entryEvidenceIds ?? raw.entryEvidence),
+    exitEvidenceIds: relationshipItemIds(raw.exitEvidenceIds ?? raw.exitEvidence),
+    evidenceSourceIds: relationshipItemIds(raw.evidenceSourceIds ?? raw.evidenceSources),
     effectiveRevision: stringValue(raw.effectiveRevision),
     created: stringValue(raw.created),
     updated: stringValue(raw.updated),
     targetInSnapshot: raw.targetInSnapshot === true,
     legacy: raw.legacy !== false,
   };
+}
+
+function hydrateRelationshipDimensions(items: TimelineItem[], relationships: TimelineRelationship[]): void {
+  if (!relationships.length) return;
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const milestoneIds = new Set(items.filter((item) => item.primaryType === 'milestone').map((item) => item.id));
+  const primaryBySource = new Map<string, Set<string>>();
+  const adjacency = new Map(items.map((item) => [item.id, new Set<string>()]));
+
+  for (const edge of relationships) {
+    if (edge.state !== 'active') continue;
+    if (edge.relationshipType === 'contributes-to' && edge.primaryContribution && milestoneIds.has(edge.targetId)) {
+      const targets = primaryBySource.get(edge.sourceId) ?? new Set<string>();
+      targets.add(edge.targetId);
+      primaryBySource.set(edge.sourceId, targets);
+    }
+    if (itemsById.has(edge.sourceId) && itemsById.has(edge.targetId)) {
+      adjacency.get(edge.sourceId)?.add(edge.targetId);
+      adjacency.get(edge.targetId)?.add(edge.sourceId);
+    }
+  }
+
+  const launchConnected = new Set(milestoneIds);
+  const queue = [...milestoneIds].sort();
+  while (queue.length) {
+    const itemId = queue.shift();
+    if (!itemId) continue;
+    for (const relatedId of [...(adjacency.get(itemId) ?? [])].sort()) {
+      if (!launchConnected.has(relatedId)) {
+        launchConnected.add(relatedId);
+        queue.push(relatedId);
+      }
+    }
+  }
+
+  for (const item of items) {
+    const primaryIds = [...(primaryBySource.get(item.id) ?? [])].sort();
+    item.primaryMilestoneId = primaryIds.length === 1 ? primaryIds[0] : null;
+    item.launchScoped = item.launchScoped || launchConnected.has(item.id);
+  }
 }
 
 function parseFinding(raw: unknown): ValidationFinding | null {
@@ -325,6 +465,17 @@ function stringValue(raw: unknown): string | null {
 
 function stringArray(raw: unknown): string[] {
   return Array.isArray(raw) ? raw.filter((value): value is string => typeof value === 'string') : [];
+}
+
+function relationshipItemIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const ids = raw.flatMap((value) => {
+    if (typeof value === 'string') return [value];
+    if (!isRecord(value)) return [];
+    const itemId = stringValue(value.itemId) ?? stringValue(value.id);
+    return itemId ? [itemId] : [];
+  });
+  return [...new Set(ids)];
 }
 
 function finiteNumber(raw: unknown): number | null {

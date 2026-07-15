@@ -13,6 +13,15 @@ The extension keeps its original technical ID,
 `com.prediclear.nimbalyst-native-tracker-comments`, so existing installations
 upgrade in place despite the broader Tracker+ name.
 
+## Screenshots
+
+![Tracker+ relationship graph, state inspector, and timeline bars across Light, Dark, Crystal Dark, and Midnight Orchid](docs/screenshots/tracker-plus-theme-audit.png)
+
+<p align="center">
+  <img src="docs/screenshots/tracker-plus-light.png" width="49%" alt="Tracker+ in the Nimbalyst Light theme">
+  <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ in the Midnight Orchid extension theme">
+</p>
+
 ## What's new in 0.3.0
 
 - Model workflow, schedule health, execution constraints, and risk as separate
@@ -54,6 +63,30 @@ The `.ntimeline` custom editor provides Timeline, Graph, and Reports views. Its
 tracker references link back to the durable native item. Timeline rows can be
 collapsed with **Compact**, while **Fit** automatically resizes the date scale
 when the editor width changes; Day, Week, or Month restores manual scaling.
+In compact mode, **Critical path** toggles a red outline on calculated path
+rows. **Summaries** optionally groups a task beneath its one active primary
+milestone contribution; dependency edges never imply hierarchy.
+
+The item inspector is hidden by default so the timeline uses the full editor
+width. Selecting an item opens it contextually, and its close button clears the
+selection and collapses the inspector again.
+
+Tracker+ derives its palette from Nimbalyst's semantic theme variables rather
+than assigning fixed purple, blue, gray, green, amber, or red fills. Timeline
+labels, graph nodes, inspector badges, and report text remain on neutral or
+lightly tinted host surfaces; color is carried by borders, progress fills,
+workflow dots, and typed relationship edges. The contrast regression covers
+Light, Dark, Crystal Dark, and Midnight Orchid; System and Auto resolve to the
+corresponding Light or Dark palette.
+
+When explicit `timeline-link` rows exist, Tracker+ resolves their source and
+target records before applying response limits, includes linked archived
+evidence, and does not mix in legacy relationship arrays. Opening a native
+projection also hydrates primary-milestone and launch-scope dimensions from the
+normalized graph. The undated lane counts only active executable work; completed
+history and plans, ADRs, features, bugs, or findings remain inspectable as
+evidence but do not inflate unscheduled work. Milestone windows are contextual
+only—Tracker+ never invents item dates.
 
 ## Agent tools
 

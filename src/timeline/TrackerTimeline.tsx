@@ -4,13 +4,16 @@ import type { EditorHostProps } from '@nimbalyst/extension-sdk';
 
 import {
   RELATIONSHIP_LABELS,
+  activeUnscheduledItems,
   dayNumber,
   dayToIso,
   deriveTimelineRange,
   emptyTimelineDocument,
   itemReference,
   milestoneSummaries,
+  orderByPrimaryMilestone,
   parseTimelineDocument,
+  primaryMilestoneParentIds,
   relationshipLabel,
 } from './model';
 import type {
@@ -32,8 +35,9 @@ export function TrackerTimeline({ host }: EditorHostProps) {
   const [document, setDocument] = useState<TimelineDocument>(documentRef.current);
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [highlightCriticalPath, setHighlightCriticalPath] = useState(false);
 
-  const { isLoading, error, markDirty } = useEditorLifecycle(host, {
+  const { isLoading, error, theme, markDirty } = useEditorLifecycle(host, {
     applyContent: (value: TimelineDocument) => {
       documentRef.current = value;
       setDocument(value);
@@ -67,6 +71,14 @@ export function TrackerTimeline({ host }: EditorHostProps) {
     updateDocument((current) => ({ ...current, view: { ...current.view, compactRows: !current.view.compactRows } }));
   }, [updateDocument]);
 
+  const toggleSummaryRows = useCallback(() => {
+    updateDocument((current) => ({ ...current, view: { ...current.view, summaryRows: !current.view.summaryRows } }));
+  }, [updateDocument]);
+
+  useEffect(() => {
+    if (!document.view.compactRows) setHighlightCriticalPath(false);
+  }, [document.view.compactRows]);
+
   const filteredItems = useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) return document.snapshot.items;
@@ -98,7 +110,7 @@ export function TrackerTimeline({ host }: EditorHostProps) {
   const truncated = snapshot.page.queryTruncated || snapshot.page.responseTruncated;
 
   return (
-    <div className="nt-shell">
+    <div className="nt-shell" data-theme={theme}>
       <header className="nt-toolbar">
         <div className="nt-title-group">
           <span className="nt-product-mark">TD</span>
@@ -128,6 +140,14 @@ export function TrackerTimeline({ host }: EditorHostProps) {
               <button className={`nt-compact-button ${document.view.compactRows ? 'active' : ''}`} onClick={toggleCompactRows} aria-pressed={document.view.compactRows} title="Collapse timeline rows">
                 Compact
               </button>
+              <button className={`nt-summary-button ${document.view.summaryRows ? 'active' : ''}`} onClick={toggleSummaryRows} aria-pressed={document.view.summaryRows} title="Group items under their single primary milestone; dependency edges remain separate">
+                Summaries
+              </button>
+              {document.view.compactRows && snapshot.criticalPath.itemIds.length > 0 && (
+                <button className={`nt-critical-toggle ${highlightCriticalPath ? 'active' : ''}`} onClick={() => setHighlightCriticalPath((current) => !current)} aria-pressed={highlightCriticalPath} title="Highlight calculated critical-path rows with a red outline">
+                  Critical path ({snapshot.criticalPath.itemIds.length})
+                </button>
+              )}
             </div>
           )}
           <input className="nt-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter trackers…" aria-label="Filter tracker items" />
@@ -146,19 +166,19 @@ export function TrackerTimeline({ host }: EditorHostProps) {
 
       <Watermark document={document} />
 
-      <main className="nt-main">
+      <main className={`nt-main ${selected ? 'has-details' : ''}`}>
         <section className="nt-workspace">
           {snapshot.items.length === 0 ? (
             <EmptyState />
           ) : document.view.mode === 'timeline' ? (
-            <TimelineView items={filteredItems} zoom={document.view.zoom} fitToWidth={document.view.fitToWidth} compactRows={document.view.compactRows} onSelect={setSelectedId} selectedId={selectedId} />
+            <TimelineView items={filteredItems} allItems={snapshot.items} relationships={snapshot.relationships} criticalPathIds={snapshot.criticalPath.itemIds} highlightCriticalPath={highlightCriticalPath} summaryRows={document.view.summaryRows} zoom={document.view.zoom} fitToWidth={document.view.fitToWidth} compactRows={document.view.compactRows} onSelect={setSelectedId} selectedId={selectedId} />
           ) : document.view.mode === 'graph' ? (
             <GraphView items={filteredItems} relationships={snapshot.relationships} onSelect={setSelectedId} selectedId={selectedId} />
           ) : (
             <ReportView document={document} onSelect={setSelectedId} />
           )}
         </section>
-        <ItemDetails item={selected} relationships={snapshot.relationships} items={snapshot.items} onSelect={setSelectedId} />
+        {selected && <ItemDetails item={selected} relationships={snapshot.relationships} items={snapshot.items} onSelect={setSelectedId} onClose={() => setSelectedId(null)} />}
       </main>
     </div>
   );
@@ -192,8 +212,13 @@ function EmptyState() {
   );
 }
 
-function TimelineView({ items, zoom, fitToWidth, compactRows, selectedId, onSelect }: {
+function TimelineView({ items, allItems, relationships, criticalPathIds, highlightCriticalPath, summaryRows, zoom, fitToWidth, compactRows, selectedId, onSelect }: {
   items: TimelineItem[];
+  allItems: TimelineItem[];
+  relationships: TimelineRelationship[];
+  criticalPathIds: string[];
+  highlightCriticalPath: boolean;
+  summaryRows: boolean;
   zoom: TimelineZoom;
   fitToWidth: boolean;
   compactRows: boolean;
@@ -202,8 +227,25 @@ function TimelineView({ items, zoom, fitToWidth, compactRows, selectedId, onSele
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
-  const scheduled = items.filter((item) => item.startDate || item.dueDate || item.forecastDate);
-  const unscheduled = items.filter((item) => !item.startDate && !item.dueDate && !item.forecastDate);
+  const rawScheduled = items.filter((item) => item.startDate || item.dueDate || item.forecastDate);
+  const scheduled = useMemo(
+    () => summaryRows ? orderByPrimaryMilestone(rawScheduled, relationships) : rawScheduled,
+    [rawScheduled, relationships, summaryRows],
+  );
+  const undated = items.filter((item) => !item.startDate && !item.dueDate && !item.forecastDate);
+  const unscheduled = activeUnscheduledItems(items);
+  const excludedUndated = undated.length - unscheduled.length;
+  const allItemsById = useMemo(() => new Map(allItems.map((item) => [item.id, item])), [allItems]);
+  const criticalIds = useMemo(() => new Set(criticalPathIds), [criticalPathIds]);
+  const primaryParentById = useMemo(
+    () => primaryMilestoneParentIds(rawScheduled, relationships),
+    [rawScheduled, relationships],
+  );
+  const primaryChildCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const parentId of primaryParentById.values()) counts.set(parentId, (counts.get(parentId) ?? 0) + 1);
+    return counts;
+  }, [primaryParentById]);
   const range = useMemo(() => deriveTimelineRange(scheduled), [scheduled]);
   useEffect(() => {
     const element = scrollRef.current;
@@ -230,12 +272,13 @@ function TimelineView({ items, zoom, fitToWidth, compactRows, selectedId, onSele
   for (let day = range.start; day <= range.end; day += tickStep) ticks.push(day);
 
   return (
-    <div ref={scrollRef} className={`nt-timeline-scroll ${compactRows ? 'compact' : ''} ${fitToWidth ? 'fit-width' : ''}`}>
+    <div ref={scrollRef} className={`nt-timeline-scroll ${compactRows ? 'compact' : ''} ${fitToWidth ? 'fit-width' : ''} ${compactRows && highlightCriticalPath ? 'show-critical-path' : ''} ${summaryRows ? 'show-summary-rows' : ''}`}>
       <div className="nt-state-legend">
         <span><i className="health-on-track" />On track</span>
         <span><i className="health-at-risk" />At risk</span>
         <span><i className="health-late" />Late</span>
         <span><b />Bar color = schedule health; text = workflow / constraint</span>
+        {compactRows && highlightCriticalPath && <span><i className="nt-critical-path-key" />Red outline = highlighted critical path</span>}
       </div>
       <div className="nt-timeline-table" style={{ width: gridWidth + 320 }}>
         <div className="nt-timeline-header nt-sticky-label">Tracker item</div>
@@ -243,6 +286,9 @@ function TimelineView({ items, zoom, fitToWidth, compactRows, selectedId, onSele
           {ticks.map((day) => <div key={day} className="nt-time-tick" style={{ left: (day - range.start) * pxPerDay }}>{formatTick(dayToIso(day), effectiveZoom)}</div>)}
         </div>
         {scheduled.map((item) => {
+          const isCriticalPath = criticalIds.has(item.id);
+          const isSummary = summaryRows && item.primaryType === 'milestone';
+          const isSummaryChild = summaryRows && primaryParentById.has(item.id);
           const start = dayNumber(item.startDate) ?? dayNumber(item.dueDate) ?? dayNumber(item.forecastDate) ?? range.start;
           const targetEnd = dayNumber(item.dueDate) ?? start;
           const forecastEnd = dayNumber(item.forecastDate);
@@ -252,16 +298,16 @@ function TimelineView({ items, zoom, fitToWidth, compactRows, selectedId, onSele
           const forecastLeft = forecastEnd === null ? null : Math.max(0, (forecastEnd - range.start) * pxPerDay);
           return (
             <React.Fragment key={item.id}>
-              <button className={`nt-row-label nt-sticky-label ${selectedId === item.id ? 'selected' : ''}`} onClick={() => onSelect(item.id)}>
+              <button className={`nt-row-label nt-sticky-label ${selectedId === item.id ? 'selected' : ''} ${isCriticalPath ? 'nt-critical-path-item' : ''} ${isSummary ? 'nt-summary-row' : ''} ${isSummaryChild ? 'nt-summary-child' : ''}`} onClick={() => onSelect(item.id)}>
                 <span className={`nt-type-dot workflow-${slug(item.workflow)}`} />
-                <span className="nt-row-copy"><strong>{item.title}</strong><small>{itemReference(item)} · {item.workflow || 'unset'} / {item.executionConstraint}</small></span>
+                <span className="nt-row-copy"><strong>{item.title}</strong><small>{itemReference(item)} · {item.workflow || 'unset'} / {item.executionConstraint}{isSummary ? ` · ${primaryChildCount.get(item.id) ?? 0} primary items` : ''}</small></span>
                 {item.isCritical && <span className="nt-critical-badge">critical path</span>}
               </button>
-              <div className="nt-grid-row" style={{ width: gridWidth, '--nt-day-width': `${pxPerDay}px` } as React.CSSProperties} onClick={() => onSelect(item.id)}>
+              <div className={`nt-grid-row ${isCriticalPath ? 'nt-critical-path-item' : ''} ${isSummary ? 'nt-summary-row' : ''} ${isSummaryChild ? 'nt-summary-child' : ''}`} style={{ width: gridWidth, '--nt-day-width': `${pxPerDay}px` } as React.CSSProperties} onClick={() => onSelect(item.id)}>
                 {item.primaryType === 'milestone' ? (
-                  <div className={`nt-milestone-marker health-${item.scheduleHealth}`} style={{ left }} title={`${item.title} · ${item.dueDate ?? item.startDate}`} />
+                  <div className={`nt-milestone-marker health-${item.scheduleHealth} ${isCriticalPath ? 'nt-critical-path-item' : ''}`} style={{ left }} title={`${item.title} · ${item.dueDate ?? item.startDate}`} />
                 ) : (
-                  <div className={`nt-gantt-bar health-${item.scheduleHealth}`} style={{ left, width }} title={`${item.title}: ${item.startDate ?? '…'} → ${item.dueDate ?? '…'}; forecast ${item.forecastDate ?? 'unset'}`}>
+                  <div className={`nt-gantt-bar health-${item.scheduleHealth} ${isCriticalPath ? 'nt-critical-path-item' : ''}`} style={{ left, width }} title={`${item.title}: ${item.startDate ?? '…'} → ${item.dueDate ?? '…'}; forecast ${item.forecastDate ?? 'unset'}`}>
                     <span className="nt-gantt-progress" style={{ width: `${item.progress ?? 0}%` }} />
                     <span className="nt-gantt-label">{item.progress == null ? '' : `${Math.round(item.progress)}%`}</span>
                   </div>
@@ -274,12 +320,34 @@ function TimelineView({ items, zoom, fitToWidth, compactRows, selectedId, onSele
       </div>
       {unscheduled.length > 0 && (
         <div className="nt-unscheduled">
-          <h3>Unscheduled <span>{unscheduled.length}</span></h3>
-          <div className="nt-chip-list">{unscheduled.map((item) => <button key={item.id} onClick={() => onSelect(item.id)} className={selectedId === item.id ? 'selected' : ''}><span>{item.title}</span><small>{itemReference(item)} · {item.scheduleHealth}</small></button>)}</div>
+          <h3>Active work without explicit dates <span>{unscheduled.length}</span></h3>
+          <p className="nt-unscheduled-note">{excludedUndated} completed or reference records are excluded from this count. Milestone dates are shown as context only; item dates are never inferred.</p>
+          <div className="nt-chip-list">{unscheduled.map((item) => <button key={item.id} onClick={() => onSelect(item.id)} className={selectedId === item.id ? 'selected' : ''}><span>{item.title}</span><small>{itemReference(item)} · {item.workflow || 'unset'} · {verifiedMilestoneWindow(item, allItemsById, relationships)}</small></button>)}</div>
         </div>
       )}
     </div>
   );
+}
+
+function verifiedMilestoneWindow(
+  item: TimelineItem,
+  itemsById: Map<string, TimelineItem>,
+  relationships: TimelineRelationship[],
+): string {
+  const primary = item.primaryMilestoneId ? itemsById.get(item.primaryMilestoneId) : undefined;
+  const directMilestoneId = relationships.find((edge) =>
+    edge.state === 'active'
+    && edge.sourceId === item.id
+    && itemsById.get(edge.targetId)?.primaryType === 'milestone')?.targetId;
+  const milestone = primary ?? (directMilestoneId ? itemsById.get(directMilestoneId) : undefined);
+  if (!milestone) return 'no verified milestone window';
+  const start = milestone.startDate;
+  const target = milestone.dueDate;
+  const forecast = milestone.forecastDate;
+  if (start && target) return `${itemReference(milestone)} ${start} → ${target}`;
+  if (target) return `${itemReference(milestone)} target ${target}`;
+  if (forecast) return `${itemReference(milestone)} forecast ${forecast}`;
+  return `${itemReference(milestone)} window not dated`;
 }
 
 function GraphView({ items, relationships, selectedId, onSelect }: {
@@ -388,19 +456,28 @@ function ValidationPanel({ findings, onSelect }: { findings: ValidationFinding[]
   );
 }
 
-function ItemDetails({ item, relationships, items, onSelect }: {
-  item: TimelineItem | null;
+function ItemDetails({ item, relationships, items, onSelect, onClose }: {
+  item: TimelineItem;
   relationships: TimelineRelationship[];
   items: TimelineItem[];
   onSelect: (id: string) => void;
+  onClose: () => void;
 }) {
   const itemsById = useMemo(() => new Map(items.map((entry) => [entry.id, entry])), [items]);
-  if (!item) return <aside className="nt-details nt-details-empty"><span>Select an item</span><p>Inspect independent state dimensions, derived risk, slack, and normalized relationships.</p></aside>;
-  const outgoing = relationships.filter((edge) => edge.sourceId === item.id);
-  const incoming = relationships.filter((edge) => edge.targetId === item.id);
+  const incidentRelationships = relationships
+    .filter((edge) => edge.sourceId === item.id || edge.targetId === item.id)
+    .map((edge) => ({ edge, inverse: edge.targetId === item.id }))
+    .sort((left, right) => {
+      const typeOrder = left.edge.relationshipType.localeCompare(right.edge.relationshipType);
+      if (typeOrder !== 0) return typeOrder;
+      return left.edge.id.localeCompare(right.edge.id);
+    });
   return (
-    <aside className="nt-details">
-      <span className="nt-kicker">{item.primaryType}</span>
+    <aside className="nt-details" aria-label={`Details for ${item.title}`}>
+      <div className="nt-details-heading">
+        <span className="nt-kicker">{item.primaryType}</span>
+        <button className="nt-details-close" onClick={onClose} aria-label="Hide item details" title="Hide item details">×</button>
+      </div>
       <h2>{item.title}</h2>
       <a className="nt-tracker-link" href={`nimbalyst://${encodeURIComponent(itemReference(item))}`}>{itemReference(item)} ↗</a>
       <div className="nt-state-stack">
@@ -421,8 +498,7 @@ function ItemDetails({ item, relationships, items, onSelect }: {
       </dl>
       {item.scheduleHealthReasons.length > 0 && <ReasonList title="Schedule rationale" entries={item.scheduleHealthReasons} />}
       {item.riskReasons.length > 0 && <ReasonList title="Risk rationale" entries={item.riskReasons} />}
-      <RelationshipList title="Links from this item" edges={outgoing} itemsById={itemsById} inverse={false} onSelect={onSelect} />
-      <RelationshipList title="Derived backlinks" edges={incoming} itemsById={itemsById} inverse onSelect={onSelect} />
+      <RelationshipList entries={incidentRelationships} itemsById={itemsById} onSelect={onSelect} />
     </aside>
   );
 }
@@ -435,16 +511,14 @@ function ReasonList({ title, entries }: { title: string; entries: string[] }) {
   return <div className="nt-reason-list"><h3>{title}</h3><ul>{entries.map((entry) => <li key={entry}>{entry}</li>)}</ul></div>;
 }
 
-function RelationshipList({ title, edges, itemsById, inverse, onSelect }: {
-  title: string;
-  edges: TimelineRelationship[];
+function RelationshipList({ entries, itemsById, onSelect }: {
+  entries: Array<{ edge: TimelineRelationship; inverse: boolean }>;
   itemsById: Map<string, TimelineItem>;
-  inverse: boolean;
   onSelect: (id: string) => void;
 }) {
-  if (!edges.length) return null;
+  if (!entries.length) return null;
   return (
-    <div className="nt-relationship-list"><h3>{title}</h3>{edges.map((edge) => {
+    <div className="nt-relationship-list"><h3>Normalized relationships</h3><p className="nt-relationship-note">Each edge is stored once; the label below is derived for this item's side of that edge.</p>{entries.map(({ edge, inverse }) => {
       const id = inverse ? edge.sourceId : edge.targetId;
       const linked = itemsById.get(id);
       const titleValue = linked?.title || (inverse ? edge.sourceTitle || edge.sourceIssueKey : edge.targetTitle || edge.targetIssueKey) || id;

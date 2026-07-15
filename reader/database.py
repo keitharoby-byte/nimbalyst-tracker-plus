@@ -100,21 +100,88 @@ class NativeTrackerReader:
 
     def timeline_snapshot(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_timeline_params(params)
+        link_rows: list[tuple[sqlite3.Row, dict[str, Any]]] = []
         try:
             with self._connect() as connection:
                 fingerprint = self._validate_schema(connection)
-                rows = connection.execute(
+                raw_link_rows = connection.execute(
                     """
                     SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
                     FROM tracker_items
                     WHERE workspace = ?
                       AND deleted_at IS NULL
                       AND archived = 0
+                      AND type = 'timeline-link'
                     ORDER BY updated DESC, id ASC
                     LIMIT ?
                     """,
                     (parsed["workspacePath"], parsed["maxItems"] + 1),
                 ).fetchall()
+
+                link_query_truncated = len(raw_link_rows) > parsed["maxItems"]
+                for row in raw_link_rows[: parsed["maxItems"]]:
+                    data = self._parse_data(row)
+                    link_rows.append((row, self._flatten_custom_fields(data)))
+
+                if link_rows:
+                    endpoint_ids: set[str] = set()
+                    for _row, fields in link_rows:
+                        endpoint_ids.update(
+                            target["itemId"]
+                            for field_name in ("sourceItem", "targetItem")
+                            for target in self._relationship_targets(fields.get(field_name))
+                        )
+                    ordered_endpoint_ids = sorted(endpoint_ids)
+                    if ordered_endpoint_ids:
+                        placeholders = ",".join("?" for _item_id in ordered_endpoint_ids)
+                        rows = connection.execute(
+                            f"""
+                            SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
+                            FROM tracker_items
+                            WHERE workspace = ?
+                              AND deleted_at IS NULL
+                              AND type <> 'timeline-link'
+                              AND (
+                                id IN ({placeholders})
+                                OR (type = 'milestone' AND archived = 0)
+                              )
+                            ORDER BY updated DESC, id ASC
+                            LIMIT ?
+                            """,
+                            (
+                                parsed["workspacePath"],
+                                *ordered_endpoint_ids,
+                                parsed["maxItems"] + 1,
+                            ),
+                        ).fetchall()
+                    else:
+                        rows = connection.execute(
+                            """
+                            SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
+                            FROM tracker_items
+                            WHERE workspace = ?
+                              AND deleted_at IS NULL
+                              AND archived = 0
+                              AND type = 'milestone'
+                            ORDER BY updated DESC, id ASC
+                            LIMIT ?
+                            """,
+                            (parsed["workspacePath"], parsed["maxItems"] + 1),
+                        ).fetchall()
+                else:
+                    rows = connection.execute(
+                        """
+                        SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
+                        FROM tracker_items
+                        WHERE workspace = ?
+                          AND deleted_at IS NULL
+                          AND archived = 0
+                          AND type <> 'timeline-link'
+                        ORDER BY updated DESC, id ASC
+                        LIMIT ?
+                        """,
+                        (parsed["workspacePath"], parsed["maxItems"] + 1),
+                    ).fetchall()
         except ReaderError:
             raise
         except sqlite3.OperationalError as error:
@@ -129,12 +196,16 @@ class NativeTrackerReader:
                 "The Nimbalyst tracker database could not be read safely.",
             ) from None
 
-        query_truncated = len(rows) > parsed["maxItems"]
+        query_truncated = link_query_truncated or len(rows) > parsed["maxItems"]
         rows = rows[: parsed["maxItems"]]
         items: list[dict[str, Any]] = []
         raw_fields_by_id: dict[str, dict[str, Any]] = {}
-        link_rows: list[tuple[sqlite3.Row, dict[str, Any]]] = []
         project_state_revision: str | None = None
+
+        for _row, fields in link_rows:
+            project_state_revision = project_state_revision or self._bounded_string(
+                fields.get("projectStateRevision"), 200
+            )
 
         for row in rows:
             data = self._parse_data(row)
@@ -142,9 +213,6 @@ class NativeTrackerReader:
             project_state_revision = project_state_revision or self._bounded_string(
                 fields.get("projectStateRevision"), 200
             )
-            if str(row["type"]) == "timeline-link":
-                link_rows.append((row, fields))
-                continue
             item = self._timeline_item(row, fields)
             if not parsed["includeUnscheduled"] and not self._is_scheduled(item):
                 continue
@@ -168,6 +236,29 @@ class NativeTrackerReader:
 
         source = self._source(fingerprint)
         source["projectStateRevision"] = project_state_revision or "unavailable"
+        source["relationshipSource"] = (
+            "native timeline-link rows" if link_rows else "legacy tracker fields"
+        )
+        source["relationshipRows"] = len(link_rows)
+        source["endpointItems"] = len(items)
+        source["milestoneRows"] = sum(item["primaryType"] == "milestone" for item in items)
+        source["legacyRelationships"] = sum(edge.get("legacy") is True for edge in edges)
+        source["includeArchivedLinkedEvidence"] = bool(link_rows)
+        undated_items = [
+            item for item in items
+            if not item.get("startDate")
+            and not item.get("dueDate")
+            and not item.get("forecastDate")
+        ]
+        source["activeUnscheduledItems"] = sum(
+            self._is_active_executable(item) for item in undated_items
+        )
+        source["excludedUndatedEvidence"] = sum(
+            not self._is_active_executable(item) for item in undated_items
+        )
+
+        for item in items:
+            item.pop("_launchScopeExplicit", None)
 
         result = {
             "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -225,6 +316,7 @@ class NativeTrackerReader:
                 if edge["relationshipType"] == "contributes-to"
                 and edge["targetId"] == milestone["id"]
                 and edge["state"] == "active"
+                and edge.get("primaryContribution")
             ]
             deliverable_ids = {edge["sourceId"] for edge in contribution_edges}
             deliverables = [items_by_id[item_id] for item_id in deliverable_ids if item_id in items_by_id]
@@ -647,6 +739,7 @@ class NativeTrackerReader:
             "capacityPressure": self._bounded_string(fields.get("capacityPressure"), 40),
             "gate": self._bounded_string(fields.get("gate"), 200),
             "launchScoped": launch_scope == "launch",
+            "_launchScopeExplicit": launch_scope == "launch",
             "primaryMilestoneId": None,
             "scheduleSlackDays": None,
             "criticalPathSlackDays": None,
@@ -752,6 +845,9 @@ class NativeTrackerReader:
                 edge["targetIssueKey"] = items_by_id[target_id].get("issueKey")
                 edge["targetType"] = items_by_id[target_id]["primaryType"]
             edges.append(edge)
+
+        if link_rows:
+            return edges, findings
 
         legacy_specs = {
             "blockers": ("depends-on", False, "hard-serial"),
@@ -904,15 +1000,43 @@ class NativeTrackerReader:
                 if item["isCritical"]:
                     critical_ids.append(item_id)
 
+        milestones = {
+            item["id"] for item in items if item["primaryType"] == "milestone"
+        }
         primary_milestones: dict[str, list[str]] = {}
         for edge in edges:
-            if edge["relationshipType"] == "contributes-to" and edge["state"] == "active" and edge.get("primaryContribution"):
+            if (
+                edge["relationshipType"] == "contributes-to"
+                and edge["state"] == "active"
+                and edge.get("primaryContribution")
+                and edge["targetId"] in milestones
+            ):
                 primary_milestones.setdefault(edge["sourceId"], []).append(edge["targetId"])
+
+        adjacency: dict[str, set[str]] = {item_id: set() for item_id in items_by_id}
+        for edge in edges:
+            if (
+                edge["state"] == "active"
+                and edge["sourceId"] in adjacency
+                and edge["targetId"] in adjacency
+            ):
+                adjacency[edge["sourceId"]].add(edge["targetId"])
+                adjacency[edge["targetId"]].add(edge["sourceId"])
+        launch_connected = set(milestones)
+        launch_queue = sorted(milestones)
+        while launch_queue:
+            item_id = launch_queue.pop(0)
+            for related_id in sorted(adjacency[item_id]):
+                if related_id not in launch_connected:
+                    launch_connected.add(related_id)
+                    launch_queue.append(related_id)
+
         today = datetime.now(timezone.utc).date()
         for item in items:
-            primary_ids = primary_milestones.get(item["id"], [])
+            primary_ids = sorted(set(primary_milestones.get(item["id"], [])))
             if len(primary_ids) == 1:
                 item["primaryMilestoneId"] = primary_ids[0]
+            item["launchScoped"] = item["launchScoped"] or item["id"] in launch_connected
             endpoint = item.get("forecastDate") or item.get("dueDate")
             if len(primary_ids) == 1 and endpoint and primary_ids[0] in items_by_id:
                 milestone_target = items_by_id[primary_ids[0]].get("dueDate")
@@ -991,11 +1115,21 @@ class NativeTrackerReader:
         milestones = {item["id"] for item in items if item["primaryType"] == "milestone"}
         active_edges = [edge for edge in edges if edge["state"] == "active"]
         incident: dict[str, int] = {item["id"]: 0 for item in items}
+        for edge in edges:
+            if edge["state"] not in {"active", "cleared"}:
+                continue
+            referenced_ids = {
+                edge["sourceId"],
+                edge["targetId"],
+                *edge.get("entryEvidenceIds", []),
+                *edge.get("exitEvidenceIds", []),
+                *edge.get("evidenceSourceIds", []),
+            }
+            for item_id in referenced_ids:
+                if item_id in incident:
+                    incident[item_id] += 1
+
         for edge in active_edges:
-            if edge["sourceId"] in incident:
-                incident[edge["sourceId"]] += 1
-            if edge["targetId"] in incident:
-                incident[edge["targetId"]] += 1
             if edge["relationshipType"] == "depends-on" and edge.get("hardness") == "hard-serial":
                 missing = []
                 if not edge.get("ownerLabel"):
@@ -1032,7 +1166,8 @@ class NativeTrackerReader:
                 and edge.get("primaryContribution")
                 and edge["targetId"] in milestones
             ]
-            if item.get("launchScoped") and len(primary) != 1:
+            requires_primary = item.get("_launchScopeExplicit") or bool(primary)
+            if requires_primary and self._is_active_executable(item) and len(primary) != 1:
                 findings.append(
                     self._finding(
                         "primary-milestone-cardinality",
@@ -1076,7 +1211,7 @@ class NativeTrackerReader:
                     self._finding(
                         "orphan-item",
                         "warning",
-                        f"{item.get('issueKey') or item['id']} has no active typed relationship.",
+                        f"{item.get('issueKey') or item['id']} has no active or cleared typed relationship or evidence reference.",
                         item_ids=[item["id"]],
                     )
                 )
@@ -1133,6 +1268,30 @@ class NativeTrackerReader:
             or item.get("primaryType") == "milestone"
             or "timeline-item" in item.get("typeTags", [])
         )
+
+    @staticmethod
+    def _is_active_executable(item: Mapping[str, Any]) -> bool:
+        complete_workflows = {
+            "done", "completed", "achieved", "closed", "shipped", "implemented"
+        }
+        if str(item.get("workflow") or "").lower() in complete_workflows:
+            return False
+        executable_types = {
+            "task",
+            "timeline-item",
+            "devops-item",
+            "prediclear-item",
+            "automation",
+            "mr",
+            "merge-request",
+            "pull-request",
+            "change-request",
+        }
+        item_types = {
+            str(item.get("primaryType") or "").lower(),
+            *(str(tag).lower() for tag in item.get("typeTags", [])),
+        }
+        return bool(item_types.intersection(executable_types))
 
     def _in_timeline_range(
         self,

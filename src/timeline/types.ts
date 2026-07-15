@@ -126,6 +126,7 @@ export interface TimelineDocument {
     showUnscheduled: boolean;
     compactRows: boolean;
     fitToWidth: boolean;
+    summaryRows: boolean;
   };
   filters: {
     includeUnscheduled: boolean;

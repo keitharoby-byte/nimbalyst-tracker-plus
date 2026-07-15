@@ -244,6 +244,140 @@ class NativeTrackerReaderTests(unittest.TestCase):
         self.assertNotIn("Old synthetic comment", serialized)
         self.assertNotIn("Most recent synthetic comment", serialized)
 
+    def test_timeline_snapshot_resolves_explicit_link_endpoints_before_row_limit(self) -> None:
+        self._insert_timeline_items()
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            for index in range(20):
+                self._insert_tracker(
+                    connection,
+                    f"decoy-{index:02d}",
+                    f"NIM-{100 + index}",
+                    "C:\\Workspace\\One",
+                )
+            connection.execute("UPDATE tracker_items SET archived = 1 WHERE id = 'tracker-one'")
+            connection.commit()
+
+        result = self.reader.timeline_snapshot(
+            {
+                "workspacePath": "C:\\Workspace\\One",
+                "includeUnscheduled": True,
+                "maxItems": 10,
+            }
+        )
+
+        self.assertEqual(
+            {item["id"] for item in result["items"]},
+            {"milestone-one", "timeline-one", "tracker-one"},
+        )
+        self.assertEqual(len(result["relationships"]), 6)
+        self.assertTrue(all(edge["legacy"] is False for edge in result["relationships"]))
+        self.assertEqual(result["source"]["relationshipRows"], 6)
+        self.assertEqual(result["source"]["endpointItems"], 3)
+        self.assertEqual(result["source"]["legacyRelationships"], 0)
+        self.assertTrue(result["source"]["includeArchivedLinkedEvidence"])
+        self.assertEqual(sum(item["launchScoped"] for item in result["items"]), 3)
+
+    def test_intentional_secondary_contribution_does_not_require_primary_milestone(self) -> None:
+        self._insert_timeline_items()
+        secondary = {
+            "title": "Intentional supporting item",
+            "status": "in-progress",
+            "projectStateRevision": "fixture-r7",
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                """
+                INSERT INTO tracker_items (
+                  id, issue_number, issue_key, type, data, workspace, content,
+                  archived, type_tags, deleted_at, created, updated, last_indexed
+                ) VALUES ('secondary-only', 30, 'NIM-30', 'task', ?, ?, '', 0, '["task"]', NULL, ?, ?, ?)
+                """,
+                (
+                    json.dumps(secondary),
+                    "C:\\Workspace\\One",
+                    "2026-07-04T00:00:00.000Z",
+                    "2026-07-04T00:00:00.000Z",
+                    "2026-07-04T00:00:00.000Z",
+                ),
+            )
+            connection.commit()
+        self._insert_link(
+            "link-secondary-only",
+            "NIM-31",
+            "secondary-only",
+            "milestone-one",
+            "contributes-to",
+            contribution_role="secondary",
+        )
+
+        result = self.reader.timeline_snapshot(
+            {
+                "workspacePath": "C:\\Workspace\\One",
+                "includeUnscheduled": True,
+                "maxItems": 100,
+            }
+        )
+
+        cardinality = [
+            finding for finding in result["validation"]
+            if finding["code"] == "primary-milestone-cardinality"
+            and "secondary-only" in finding["itemIds"]
+        ]
+        self.assertEqual(cardinality, [])
+
+    def test_cleared_review_evidence_is_not_orphaned(self) -> None:
+        items = [
+            {
+                "id": "review-source",
+                "issueKey": "NIM-40",
+                "primaryType": "task",
+                "typeTags": ["task"],
+                "workflow": "done",
+                "_launchScopeExplicit": False,
+                "ownerLabel": "QA",
+            },
+            {
+                "id": "milestone-target",
+                "issueKey": "NIM-41",
+                "primaryType": "milestone",
+                "typeTags": ["milestone"],
+                "workflow": "achieved",
+                "_launchScopeExplicit": False,
+                "ownerLabel": "PM",
+            },
+            {
+                "id": "cleared-evidence",
+                "issueKey": "NIM-42",
+                "primaryType": "task",
+                "typeTags": ["task", "evidence"],
+                "workflow": "done",
+                "_launchScopeExplicit": False,
+                "ownerLabel": "QA",
+            },
+        ]
+        edges = [
+            {
+                "id": "cleared-review",
+                "sourceId": "review-source",
+                "targetId": "milestone-target",
+                "relationshipType": "reviews",
+                "state": "cleared",
+                "entryEvidenceIds": ["cleared-evidence"],
+                "exitEvidenceIds": ["review-source"],
+                "evidenceSourceIds": [],
+                "primaryContribution": False,
+            }
+        ]
+
+        findings = self.reader._validate_timeline(items, edges)
+
+        orphaned = [
+            finding for finding in findings
+            if finding["code"] == "orphan-item"
+            and "cleared-evidence" in finding["itemIds"]
+        ]
+        self.assertEqual(orphaned, [])
+
     def test_milestone_report_surfaces_overdue_and_blocked_work(self) -> None:
         self._insert_timeline_items()
 

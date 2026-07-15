@@ -7,7 +7,7 @@
     "build": "vite build && vite build --config vite.backend.config.ts && node scripts/copy-reader-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test:python": "python -m unittest discover -s tests/python -v",
-    "test": "npm run typecheck && npm run test:python",
+    "test": "npm run typecheck && node --test tests/timeline-model.test.mjs tests/theme-contrast.test.mjs && npm run test:python",
     "verify:package": "node scripts/verify-package.mjs"
   },
   "dependencies": {
