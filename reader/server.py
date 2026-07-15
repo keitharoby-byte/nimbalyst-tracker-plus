@@ -59,6 +59,10 @@ def handle(request: Any, reader: NativeTrackerReader) -> dict[str, Any]:
         result = reader.list_comments(params)
     elif method == "get_with_comments":
         result = reader.get_with_comments(params)
+    elif method == "timeline_snapshot":
+        result = reader.timeline_snapshot(params)
+    elif method == "milestone_report":
+        result = reader.milestone_report(params)
     else:
         raise ReaderError("METHOD_NOT_FOUND", "The requested native tracker operation is not supported.")
     return {"id": request_id, "ok": True, "result": result}

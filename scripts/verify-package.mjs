@@ -6,6 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
 const required = [
   manifest.main,
+  ...(manifest.styles ? [manifest.styles] : []),
   ...manifest.contributions.backendModules.map((module) => module.entry),
   'dist/reader/server.py',
   'dist/reader/database.py',

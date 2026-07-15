@@ -1,0 +1,213 @@
+type: milestone
+displayName: Milestone
+displayNamePlural: Milestones
+icon: flag_circle
+color: '#8b5cf6'
+idPrefix: mil
+idFormat: ulid
+primaryCapable: true
+modes:
+  inline: true
+  fullDocument: true
+sync:
+  mode: shared
+  scope: project
+fields:
+  - name: title
+    type: string
+    required: true
+    displayInline: true
+  - name: status
+    type: select
+    required: true
+    default: planned
+    displayInline: true
+    options:
+      - value: planned
+        label: Planned
+        icon: event
+        color: '#64748b'
+      - value: in-progress
+        label: In Progress
+        icon: motion_photos_on
+        color: '#3b82f6'
+      - value: in-review
+        label: In Review
+        icon: rate_review
+        color: '#8b5cf6'
+      - value: waiting
+        label: Waiting
+        icon: hourglass_top
+        color: '#f59e0b'
+      - value: achieved
+        label: Achieved
+        icon: flag_circle
+        color: '#10b981'
+  - name: startDate
+    type: date
+    displayInline: true
+  - name: targetDate
+    type: date
+    required: true
+    displayInline: true
+  - name: forecastDate
+    type: date
+    displayInline: true
+  - name: progress
+    type: number
+    min: 0
+    max: 100
+    default: 0
+    displayInline: true
+  - name: scheduleHealth
+    type: select
+    default: on-track
+    displayInline: true
+    options:
+      - value: on-track
+        label: On Track
+        color: '#22c55e'
+      - value: at-risk
+        label: At Risk
+        color: '#f59e0b'
+      - value: late
+        label: Late
+        color: '#ef4444'
+  - name: executionConstraint
+    type: select
+    default: clear
+    displayInline: true
+    options:
+      - value: clear
+        label: Clear
+        color: '#64748b'
+      - value: waiting
+        label: Waiting
+        color: '#f59e0b'
+      - value: blocked
+        label: Blocked
+        color: '#ef4444'
+      - value: paused
+        label: Paused
+        color: '#8b5cf6'
+  - name: impact
+    type: number
+    min: 1
+    max: 5
+    displayInline: true
+  - name: likelihood
+    type: number
+    min: 1
+    max: 5
+    displayInline: true
+  - name: riskDurability
+    type: select
+    options:
+      - value: transient
+        label: Transient
+      - value: recurring
+        label: Recurring
+      - value: structural
+        label: Structural
+      - value: external
+        label: External
+  - name: recoverability
+    type: select
+    options:
+      - value: easy
+        label: Easy
+      - value: moderate
+        label: Moderate
+      - value: hard
+        label: Hard
+  - name: evidenceConfidence
+    type: select
+    options:
+      - value: low
+        label: Low
+      - value: medium
+        label: Medium
+      - value: high
+        label: High
+  - name: technicalUncertainty
+    type: select
+    options:
+      - value: low
+        label: Low
+      - value: medium
+        label: Medium
+      - value: high
+        label: High
+      - value: critical
+        label: Critical
+  - name: capacityPressure
+    type: select
+    options:
+      - value: low
+        label: Low
+      - value: medium
+        label: Medium
+      - value: high
+        label: High
+      - value: critical
+        label: Critical
+  - name: owner
+    type: user
+    displayInline: true
+  - name: summary
+    type: text
+    required: true
+  - name: gate
+    type: string
+  - name: reportCadence
+    type: select
+    default: on-demand
+    options:
+      - value: on-demand
+        label: On demand
+      - value: weekly
+        label: Weekly
+      - value: monthly
+        label: Monthly
+  - name: projectStateRevision
+    type: string
+  - name: tags
+    type: array
+    itemType: string
+roles:
+  title: title
+  workflowStatus: status
+  assignee: owner
+  tags: tags
+  startDate: startDate
+  dueDate: targetDate
+  progress: progress
+statusBarLayout:
+  - row:
+      - field: status
+        width: 160
+      - field: scheduleHealth
+        width: 150
+      - field: executionConstraint
+        width: 170
+  - row:
+      - field: targetDate
+        width: 150
+      - field: forecastDate
+        width: 150
+      - field: progress
+        width: 110
+inlineTemplate: '{icon} {title} {status} {scheduleHealth} {executionConstraint} {targetDate}'
+tableView:
+  defaultColumns:
+    - title
+    - status
+    - scheduleHealth
+    - executionConstraint
+    - targetDate
+    - forecastDate
+    - progress
+    - owner
+  sortable: true
+  filterable: true
+  exportable: true

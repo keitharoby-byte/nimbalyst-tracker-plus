@@ -47,7 +47,7 @@ export class PythonBridge {
           throw error;
         }
         lastError = error;
-        this.log('warn', `[native-tracker-comments] helper.restart attempt=${attempt + 1}`);
+        this.log('warn', `[tracker-plus] helper.restart attempt=${attempt + 1}`);
         await this.stop();
       }
     }
@@ -132,7 +132,7 @@ export class PythonBridge {
     for (const candidate of candidates) {
       try {
         await this.spawnCandidate(candidate, scriptPath);
-        this.log('info', `[native-tracker-comments] helper.start command=${candidate.command}`);
+        this.log('info', `[tracker-plus] helper.start command=${candidate.command}`);
         return;
       } catch (error) {
         lastError = error;
@@ -151,9 +151,9 @@ export class PythonBridge {
 
   private async spawnCandidate(candidate: PythonCandidate, scriptPath: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(candidate.command, [...candidate.prefixArgs, '-I', scriptPath], {
+      const child = spawn(candidate.command, [...candidate.prefixArgs, '-I', '-B', scriptPath], {
         cwd: path.dirname(scriptPath),
-        env: { ...process.env, PYTHONUTF8: '1' },
+        env: { ...process.env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1' },
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -177,7 +177,7 @@ export class PythonBridge {
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
       for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-        this.log('warn', `[native-tracker-comments] helper ${line.slice(0, 1_000)}`);
+        this.log('warn', `[tracker-plus] helper ${line.slice(0, 1_000)}`);
       }
     });
     child.once('exit', (code, signal) => {

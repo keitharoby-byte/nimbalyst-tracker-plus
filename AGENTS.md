@@ -5,7 +5,7 @@ This is a Nimbalyst extension project. Read [CLAUDE.md](./CLAUDE.md) before maki
 ## What This Project Is
 
 - Extension ID: `com.prediclear.nimbalyst-native-tracker-comments`
-- Template: `starter` (repurposed as a backend-only extension)
+- Template: `starter` (repurposed for a custom editor and utility backend)
 - Build output is declared by `manifest.json`
 - Source lives in `src/`
 - `dist/` is generated output and should not be edited by hand
@@ -44,9 +44,10 @@ Use these docs in this order:
 ## Validation Checklist
 
 - `manifest.json > main` matches the file Vite emits in `dist/`
-- The backend requests only `mcp-server-register`
-- Both registered MCP tools have matching backend handlers
+- The backend requests only `mcp-server-register` and `workspace-files`
+- All four registered MCP tools have matching backend handlers
 - The Python reader opens SQLite with `mode=ro` and enables `query_only`
+- `TrackerTimeline` uses `useEditorLifecycle` and Nimbalyst CSS variables
 - `npm test` and `npm run verify:package` pass
 
 ## When Unsure

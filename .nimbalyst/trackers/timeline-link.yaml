@@ -1,0 +1,165 @@
+type: timeline-link
+displayName: Timeline Relationship
+displayNamePlural: Timeline Relationships
+icon: conversion_path
+color: '#14b8a6'
+idPrefix: rel
+idFormat: ulid
+primaryCapable: true
+modes:
+  inline: true
+  fullDocument: false
+sync:
+  mode: shared
+  scope: project
+fields:
+  - name: title
+    type: string
+    required: true
+    displayInline: true
+  - name: status
+    type: select
+    required: true
+    default: active
+    displayInline: true
+    options:
+      - value: active
+        label: Active
+        color: '#3b82f6'
+      - value: cleared
+        label: Cleared
+        color: '#10b981'
+      - value: superseded
+        label: Superseded
+        color: '#64748b'
+  - name: sourceItem
+    type: relationship
+    required: true
+    relationshipTypeKey: timeline-source
+    targetTrackerTypes: '*'
+    multiValue: false
+    displayInline: true
+  - name: relationshipType
+    type: select
+    required: true
+    displayInline: true
+    options:
+      - value: depends-on
+        label: Depends on
+        color: '#ef4444'
+      - value: contributes-to
+        label: Contributes to
+        color: '#8b5cf6'
+      - value: reviews
+        label: Reviews
+        color: '#38bdf8'
+      - value: evidences
+        label: Evidences
+        color: '#94a3b8'
+      - value: implements
+        label: Implements
+        color: '#22c55e'
+      - value: related
+        label: Related
+        color: '#f59e0b'
+  - name: targetItem
+    type: relationship
+    required: true
+    relationshipTypeKey: timeline-target
+    targetTrackerTypes: '*'
+    multiValue: false
+    displayInline: true
+  - name: directedness
+    type: select
+    required: true
+    default: directed
+    displayInline: true
+    options:
+      - value: directed
+        label: Directed
+      - value: symmetric
+        label: Symmetric
+  - name: dependencyMode
+    type: select
+    default: finish-to-start
+    displayInline: true
+    options:
+      - value: finish-to-start
+        label: Finish to start
+      - value: start-to-start
+        label: Start to start
+      - value: finish-to-finish
+        label: Finish to finish
+      - value: start-to-finish
+        label: Start to finish
+  - name: hardness
+    type: select
+    default: soft-coordination
+    displayInline: true
+    options:
+      - value: hard-serial
+        label: Hard serial
+      - value: shared-resource
+        label: Shared resource
+      - value: soft-coordination
+        label: Soft coordination
+  - name: leadLagDays
+    type: number
+    min: -365
+    max: 365
+    default: 0
+    displayInline: true
+  - name: clearingCondition
+    type: text
+  - name: owner
+    type: user
+    displayInline: true
+  - name: contributionRole
+    type: select
+    default: secondary
+    options:
+      - value: primary
+        label: Primary milestone
+      - value: secondary
+        label: Secondary contribution
+  - name: entryEvidence
+    type: relationship
+    relationshipTypeKey: entry-evidence
+    targetTrackerTypes: '*'
+    multiValue: true
+  - name: exitEvidence
+    type: relationship
+    relationshipTypeKey: exit-evidence
+    targetTrackerTypes: '*'
+    multiValue: true
+  - name: evidenceSources
+    type: relationship
+    relationshipTypeKey: evidences
+    targetTrackerTypes: '*'
+    multiValue: true
+  - name: effectiveRevision
+    type: string
+  - name: projectStateRevision
+    type: string
+  - name: tags
+    type: array
+    itemType: string
+roles:
+  title: title
+  workflowStatus: status
+  assignee: owner
+  tags: tags
+inlineTemplate: '{icon} {sourceItem} {relationshipType} {targetItem} {status}'
+tableView:
+  defaultColumns:
+    - title
+    - status
+    - sourceItem
+    - relationshipType
+    - targetItem
+    - dependencyMode
+    - hardness
+    - owner
+  sortable: true
+  filterable: true
+  exportable: true

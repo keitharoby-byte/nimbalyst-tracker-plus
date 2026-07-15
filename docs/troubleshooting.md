@@ -31,3 +31,16 @@ timeout and never holds a connection between tool calls.
 Confirm that the extension is enabled and that backend consent has been
 granted. Use Nimbalyst Extension Dev Tools to inspect extension status and
 main-process extension logs; restarting Nimbalyst is not normally required.
+
+## `OUTPUT_DIRECTORY_NOT_FOUND`
+
+The generation tool will not create an unknown directory or follow a symlink.
+Create the intended folder inside the workspace first, then retry with the same
+relative `.ntimeline` or `.md` path.
+
+## Timeline is stale
+
+The timeline is a durable projection file rather than a second database. Run
+`native_tracker_sync_timeline` again after native tracker updates. The tool
+preserves the document title and saved view settings while replacing the
+bounded snapshot.
