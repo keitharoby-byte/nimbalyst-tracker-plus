@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.4.0 is Windows-first and was validated with Nimbalyst 0.68.1. Because
+Version 0.4.1 is Windows-first and was validated with Nimbalyst 0.68.1. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID,
@@ -22,7 +22,14 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ in the Midnight Orchid extension theme">
 </p>
 
-## What's new in 0.4.0
+## What's new in 0.4.1
+
+- Register all six tools through separate read/query and projection backends,
+  avoiding the Nimbalyst 0.68.1 four-tool registration ceiling.
+- Keep comment, saved-query, and traversal calls on a least-privilege backend;
+  request workspace-file access only for timeline and report generation.
+
+## Previously in 0.4.0
 
 - Add `launch` items and explicit `part-of-launch` membership with separate
   scope roles, lifecycle validation, nested-launch rollups, and hard blockers.
@@ -147,7 +154,8 @@ go through Nimbalyst's built-in `tracker_create`, `tracker_update`, and
 
 1. Confirm **Tracker+** is enabled in Nimbalyst Extensions. New installs
    default the safe renderer contribution to enabled; backend consent remains
-   first-use and opt-in.
+   first-use and opt-in. Tracker+ separates its four read/query tools from its
+   two projection tools so every tool is registered on supported hosts.
 2. Create `launch`, `milestone`, `timeline-item`, and `timeline-link` tracker
    records in the native tracker.
 3. Create a Tracker Timeline from the New File menu, or call
@@ -165,7 +173,8 @@ the editor against native validation items.
 - SQLite opens with `mode=ro` and immediately enables `PRAGMA query_only = ON`.
 - Every database lookup is workspace-scoped and excludes deleted/archived data.
 - Comment and timeline responses are bounded; identity objects are minimized.
-- The backend requests `mcp-server-register` and `workspace-files`, never the
+- The read/query backend requests only `mcp-server-register`. The projection
+  backend additionally requests `workspace-files`; neither requests the
   Nimbalyst database-write broker, secrets, or network access.
 - Workspace writes are limited to validated relative `.ntimeline` and `.md`
   files explicitly requested through the generation tools.

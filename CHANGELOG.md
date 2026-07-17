@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.4.1 - 2026-07-17
+
+- Split the six MCP tools into a four-tool read/query backend and a two-tool
+  projection backend so Nimbalyst 0.68.1 registers every tool instead of
+  truncating a single six-tool batch.
+- Give the read/query backend least-privilege `mcp-server-register` consent;
+  reserve `workspace-files` for timeline and milestone projection tools.
+- Add package and registration-layout checks, remove obsolete single-backend
+  build output, and document installation, consent, and recovery behavior.
+
 ## 0.4.0 - 2026-07-17
 
 - Add a versioned bundled registry with safe workspace overrides for terminal

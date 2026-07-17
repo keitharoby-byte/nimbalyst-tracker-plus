@@ -13,6 +13,7 @@ import {
   type McpToolDescriptor,
   type ReaderMethod,
 } from './contracts';
+import { TOOL_NAMES_BY_FAMILY, type BackendFamily } from './backendFamilies';
 import { NativeTrackerError, safeErrorResult } from './errors';
 import { PythonBridge } from './pythonBridge';
 import { prepareTimelineSync } from './timeline/sync';
@@ -185,6 +186,11 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
     },
   },
 ];
+
+const TOOL_DESCRIPTORS_BY_FAMILY: Record<BackendFamily, McpToolDescriptor[]> = {
+  read: TOOL_DESCRIPTORS.filter((tool) => TOOL_NAMES_BY_FAMILY.read.includes(tool.name as typeof TOOL_NAMES_BY_FAMILY.read[number])),
+  projection: TOOL_DESCRIPTORS.filter((tool) => TOOL_NAMES_BY_FAMILY.projection.includes(tool.name as typeof TOOL_NAMES_BY_FAMILY.projection[number])),
+};
 
 function ensureWorkspace(workspacePath: string): void {
   if (!path.isAbsolute(workspacePath)) {
@@ -418,7 +424,7 @@ function readerParams(params: Record<string, unknown>): Record<string, unknown> 
   return reader;
 }
 
-export async function activate(context: BackendContext): Promise<{
+export async function activateBackend(context: BackendContext, family: BackendFamily): Promise<{
   methods: Record<string, (params?: Record<string, unknown>) => Promise<unknown>>;
   deactivate: () => Promise<void>;
 }> {
@@ -427,8 +433,9 @@ export async function activate(context: BackendContext): Promise<{
   if (!extensionPath) throw new Error('The host did not provide the extension installation path.');
 
   const bridge = new PythonBridge(extensionPath, log);
-  await registerMcpTools(TOOL_DESCRIPTORS);
-  log('info', '[tracker-plus] addon.activate');
+  const toolDescriptors = TOOL_DESCRIPTORS_BY_FAMILY[family];
+  await registerMcpTools(toolDescriptors);
+  log('info', `[tracker-plus] addon.activate family=${family} tools=${toolDescriptors.length}`);
 
   const callReader = async (method: ReaderMethod, params: Record<string, unknown>): Promise<unknown> => {
     const started = Date.now();
@@ -509,20 +516,23 @@ export async function activate(context: BackendContext): Promise<{
     }
   };
 
+  const methods: Record<string, (params?: Record<string, unknown>) => Promise<unknown>> = family === 'read'
+    ? {
+        [TOOL_LIST_COMMENTS]: async (params?: Record<string, unknown>) => await callComments('list_comments', params),
+        [TOOL_GET_WITH_COMMENTS]: async (params?: Record<string, unknown>) => await callComments('get_with_comments', params),
+        [TOOL_QUERY]: async (params?: Record<string, unknown>) => await callGraph('query_items', params),
+        [TOOL_TRAVERSE]: async (params?: Record<string, unknown>) => await callGraph('traverse_graph', params),
+      }
+    : {
+        [TOOL_SYNC_TIMELINE]: syncTimeline,
+        [TOOL_MILESTONE_REPORT]: generateReport,
+      };
+
   return {
-    methods: {
-      [TOOL_LIST_COMMENTS]: async (params) => await callComments('list_comments', params),
-      [TOOL_GET_WITH_COMMENTS]: async (params) => await callComments('get_with_comments', params),
-      [TOOL_SYNC_TIMELINE]: syncTimeline,
-      [TOOL_MILESTONE_REPORT]: generateReport,
-      [TOOL_QUERY]: async (params) => await callGraph('query_items', params),
-      [TOOL_TRAVERSE]: async (params) => await callGraph('traverse_graph', params),
-    },
+    methods,
     deactivate: async () => {
       await bridge.stop();
-      log('info', '[tracker-plus] addon.deactivate');
+      log('info', `[tracker-plus] addon.deactivate family=${family}`);
     },
   };
 }
-
-export default { activate };

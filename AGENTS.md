@@ -44,8 +44,8 @@ Use these docs in this order:
 ## Validation Checklist
 
 - `manifest.json > main` matches the file Vite emits in `dist/`
-- The backend requests only `mcp-server-register` and `workspace-files`
-- All four registered MCP tools have matching backend handlers
+- The read/query backend requests only `mcp-server-register`; the projection backend additionally requests `workspace-files`
+- The read/query backend registers four MCP tools and the projection backend registers two; all six have matching handlers
 - The Python reader opens SQLite with `mode=ro` and enables `query_only`
 - `TrackerTimeline` uses `useEditorLifecycle` and Nimbalyst CSS variables
 - `npm test` and `npm run verify:package` pass

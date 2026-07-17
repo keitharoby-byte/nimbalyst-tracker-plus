@@ -5,7 +5,7 @@
 - Validation date: 2026-07-17
 - Nimbalyst: 0.68.1 packaged build
 - Electron / embedded Node: 41.8.0 / 24.16.0
-- Extension: Tracker+ 0.4.0
+- Extension: Tracker+ 0.4.1
 - Extension API: 1.0.0
 - SDK: 0.2.2
 - Platform: Windows
@@ -16,14 +16,14 @@
 
 The extension built and installed successfully, and installed manifest/backend/
 reader/registry hashes matched the final build. The package declares six
-backend methods and one `.ntimeline` custom editor using only
-`mcp-server-register` and `workspace-files`. Thirty-nine Python and nine
-backend/renderer/model/contrast checks passed. The development hot-reload
-and restart paths were exercised. After removing a renderer import unavailable
-in the Nimbalyst 0.68.1 host runtime, the activation log was clean and
-`extension_get_status` reported the extension loaded with its `.ntimeline`
-editor and New File contribution. Package verification guards against
-reintroducing that unsupported runtime import.
+backend methods across a four-tool read/query module and a two-tool projection
+module, plus one `.ntimeline` custom editor. The read/query module requests only
+`mcp-server-register`; the projection module additionally requests
+`workspace-files`. Thirty-nine Python and eleven backend/renderer/model/
+contrast checks passed. Nimbalyst 0.68.1 was observed truncating a single
+six-tool registration to four, so Tracker+ 0.4.1 packages the two families as
+separate utility modules. Package verification guards both module layout and
+against reintroducing the unsupported renderer import.
 
 The adapter requires the `tracker_items` columns listed in
 `reader/contracts.py`. It records a SHA-256 fingerprint of ordered column names

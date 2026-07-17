@@ -28,12 +28,16 @@ timeout and never holds a connection between tool calls.
 
 ## Tools are absent
 
-Confirm that the extension is enabled and that backend consent has been
-granted. Use Nimbalyst Extension Dev Tools to inspect extension status and
-main-process extension logs; restarting Nimbalyst is not normally required.
-If install/reload reports success while the status helper lags, confirm that the
-installed manifest and bundle contain the current version and look for an
-`addon.activate` entry under the extension ID in the main-process log.
+Confirm that the extension is enabled and consent was granted for the relevant
+backend family. Main-process logs should show the read/query module registering
+four tools and the projection module registering two. Use Nimbalyst Extension
+Dev Tools to inspect extension status and logs; restarting Nimbalyst is not
+normally required. An in-place upgrade from the older single-module package is
+the exception: after install/reload, restart once so the host discards its
+cached backend manifest, then approve first-use consent for the new projection
+module. If status still lags, confirm that the installed manifest and bundles
+contain the current version and look for `family=read tools=4` and
+`family=projection tools=2` activation entries under the extension ID.
 
 ## `OUTPUT_DIRECTORY_NOT_FOUND`
 

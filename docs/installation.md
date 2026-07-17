@@ -16,10 +16,17 @@ columns, and a read-only connection without printing tracker content.
 3. Build with Nimbalyst's `extension_build` developer tool.
 4. Install with `extension_install` using this repository root.
 5. Enable **Tracker+** in Extensions settings.
-6. Invoke a `native_tracker_*` tool and approve the first-use native-code and
-   workspace-file prompt.
+6. Invoke a read/query tool and approve its first-use native-code prompt. The
+   separate projection backend asks for workspace-file access when a timeline
+   or milestone report is first generated.
 7. During iteration use `extension_reload`, then check `extension_get_status`
    and the main-process extension logs.
+
+Tracker+ deliberately packages two backend modules. The read/query module
+registers comment orientation, predicate/saved queries, and bounded traversal
+(four tools). The projection module registers timeline sync and milestone
+report generation (two tools). This split keeps every registration within the
+supported host batch size and gives read-only calls least-privilege consent.
 
 For agent operation after installation, use [agent-guide.md](agent-guide.md).
 It distinguishes read-only orientation, native tracker mutations, and generated

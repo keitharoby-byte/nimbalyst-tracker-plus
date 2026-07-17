@@ -2,12 +2,13 @@
 
 Tracker+ is privileged local code because it opens a Nimbalyst
 application database and spawns Python. Nimbalyst therefore keeps its utility
-backend disabled until the user approves the first-use native-code prompt.
+backends disabled until the user approves their first-use native-code prompts.
 
 ## Enforced controls
 
-- The manifest requests `mcp-server-register` and `workspace-files`. It does
-  not request `nimbalyst-database-write`, `secrets-read`, or network access.
+- The read/query backend requests only `mcp-server-register`. The projection
+  backend additionally requests `workspace-files`. Neither requests
+  `nimbalyst-database-write`, `secrets-read`, or network access.
 - The database URI includes `mode=ro`; every connection immediately enables
   and verifies `PRAGMA query_only = ON`.
 - SQL is fixed in source and values are parameterized. There is no SQL tool.

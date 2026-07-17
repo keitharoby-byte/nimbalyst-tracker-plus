@@ -7,7 +7,7 @@ editor.
 - Extension ID: `com.prediclear.nimbalyst-native-tracker-comments`
 - Source: `src/` and `reader/`
 - Generated output: `dist/` (never edit by hand)
-- Runtime permissions: `mcp-server-register`, `workspace-files`
+- Runtime permissions: read/query backend `mcp-server-register`; projection backend additionally `workspace-files`
 
 Agents operating the installed tools must follow
 [`docs/agent-guide.md`](./docs/agent-guide.md). It defines exact arguments,

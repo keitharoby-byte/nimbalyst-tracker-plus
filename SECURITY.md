@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest released version is supported. Version 0.4.0 is validated for
+Only the latest released version is supported. Version 0.4.1 is validated for
 the Windows SQLite backend in Nimbalyst 0.68.1.
 
 ## Reporting a vulnerability

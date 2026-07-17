@@ -1048,7 +1048,7 @@ class NativeTrackerReader:
         if not appdata:
             raise ReaderError(
                 "PLATFORM_UNSUPPORTED",
-                "Version 0.4.0 supports Windows installations with APPDATA available.",
+                "Version 0.4.1 supports Windows installations with APPDATA available.",
             )
         root = Path(appdata) / "@nimbalyst" / "electron"
         config_path = root / "database-backend.json"

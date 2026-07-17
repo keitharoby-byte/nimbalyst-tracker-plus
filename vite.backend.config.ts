@@ -13,9 +13,12 @@ export default defineConfig({
     emptyOutDir: false,
     sourcemap: true,
     lib: {
-      entry: './src/backend.ts',
+      entry: {
+        'backend-read': './src/backend-read.ts',
+        'backend-projection': './src/backend-projection.ts',
+      },
       formats: ['es'],
-      fileName: () => 'backend.js',
+      fileName: (_format, entryName) => `${entryName}.js`,
     },
     rollupOptions: {
       external: nodeBuiltins,

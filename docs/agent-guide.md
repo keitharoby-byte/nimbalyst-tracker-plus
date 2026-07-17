@@ -26,16 +26,19 @@ with a built-in tracker tool, then run `native_tracker_sync_timeline` again.
 - The installed extension is named **Tracker+**.
 - Its stable extension ID is
   `com.prediclear.nimbalyst-native-tracker-comments`.
-- The backend is consent-gated. The first `native_tracker_*` call may require
-  the user to approve native-code and workspace-file access.
+- Two backend families are consent-gated. Comment/query/traversal tools may
+  require first-use native-code approval; timeline/report generation may also
+  require workspace-file approval.
 - MCP clients may add a server prefix to tool names. Select the tool whose name
   ends with the documented `native_tracker_*` suffix.
 - Every call is automatically scoped to the workspace associated with the
   current AI session. Do not send a workspace path or database path.
 
-If the tools are absent, confirm that Tracker+ is enabled and backend consent
-has been granted. Use the extension status and main-process logs before
-considering a restart; a restart is not part of normal recovery.
+If tools are absent, confirm that Tracker+ is enabled and consent has been
+granted for the relevant backend family. Main-process logs should show a
+four-tool read/query registration and a two-tool projection registration. Use
+the extension status and logs before considering a restart; a restart is not
+part of normal recovery.
 
 ## Recommended operating sequence
 
@@ -537,8 +540,9 @@ Common recoveries:
   path-addressed predicate error; never retry by sending SQL.
 - `RESULT_TRUNCATED` or `VALIDATION_FAILED`: narrow the graph or resolve the
   returned findings; fail-closed launch views must not be treated as complete.
-- Missing tools: confirm extension enablement and backend consent, then inspect
-  extension logs.
+- Missing tools: confirm extension enablement and consent for the relevant
+  backend family, then verify the logs contain registrations of four read/query
+  tools and two projection tools.
 
 See [troubleshooting.md](troubleshooting.md) for the complete recovery list and
 [security.md](security.md) for the trust boundary.
