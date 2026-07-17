@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useEditorLifecycle } from '@nimbalyst/extension-sdk';
+import { TrackerReferenceChip, useEditorLifecycle } from '@nimbalyst/extension-sdk';
 import type { EditorHostProps } from '@nimbalyst/extension-sdk';
 
 import {
@@ -9,14 +9,17 @@ import {
   dayToIso,
   deriveTimelineRange,
   emptyTimelineDocument,
+  itemMatchesFilters,
   itemReference,
   milestoneSummaries,
   orderByPrimaryMilestone,
   parseTimelineDocument,
   primaryMilestoneParentIds,
+  pullRequestReference,
   relationshipLabel,
 } from './model';
 import type {
+  CompletionState,
   MilestoneSummary,
   RelationshipType,
   TimelineDocument,
@@ -25,6 +28,7 @@ import type {
   TimelineRelationship,
   TimelineZoom,
   ValidationFinding,
+  ScheduleHealth,
 } from './types';
 
 const PIXELS_PER_DAY: Record<TimelineZoom, number> = { day: 30, week: 12, month: 5 };
@@ -75,14 +79,46 @@ export function TrackerTimeline({ host }: EditorHostProps) {
     updateDocument((current) => ({ ...current, view: { ...current.view, summaryRows: !current.view.summaryRows } }));
   }, [updateDocument]);
 
+  const toggleCompletionFilter = useCallback((state: CompletionState) => {
+    updateDocument((current) => {
+      const selected = current.filters.completionStates.includes(state);
+      const completionStates = selected
+        ? current.filters.completionStates.filter((value) => value !== state)
+        : [...current.filters.completionStates, state];
+      return { ...current, filters: { ...current.filters, completionStates } };
+    });
+  }, [updateDocument]);
+
+  const toggleScheduleFilter = useCallback((state: ScheduleHealth) => {
+    updateDocument((current) => {
+      const selected = current.filters.scheduleHealth.includes(state);
+      const scheduleHealth = selected
+        ? current.filters.scheduleHealth.filter((value) => value !== state)
+        : [...current.filters.scheduleHealth, state];
+      return { ...current, filters: { ...current.filters, scheduleHealth } };
+    });
+  }, [updateDocument]);
+
+  const resetStateFilters = useCallback(() => {
+    updateDocument((current) => ({
+      ...current,
+      filters: {
+        ...current.filters,
+        completionStates: ['active', 'complete'],
+        scheduleHealth: ['on-track', 'at-risk', 'late'],
+      },
+    }));
+  }, [updateDocument]);
+
   useEffect(() => {
     if (!document.view.compactRows) setHighlightCriticalPath(false);
   }, [document.view.compactRows]);
 
   const filteredItems = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return document.snapshot.items;
-    return document.snapshot.items.filter((item) => [
+    const stateFiltered = document.snapshot.items.filter((item) => itemMatchesFilters(item, document.filters));
+    if (!needle) return stateFiltered;
+    return stateFiltered.filter((item) => [
       item.title,
       item.issueKey,
       item.primaryType,
@@ -93,12 +129,18 @@ export function TrackerTimeline({ host }: EditorHostProps) {
       item.ownerLabel,
       ...item.typeTags,
     ].some((value) => String(value ?? '').toLowerCase().includes(needle)));
-  }, [document.snapshot.items, search]);
+  }, [document.filters, document.snapshot.items, search]);
 
   const selected = useMemo(
     () => document.snapshot.items.find((item) => item.id === selectedId) ?? null,
     [document.snapshot.items, selectedId],
   );
+
+  useEffect(() => {
+    if (document.view.mode !== 'report' && selectedId && !filteredItems.some((item) => item.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }, [document.view.mode, filteredItems, selectedId]);
 
   if (error) return <div className="nt-error">{error.message}</div>;
   if (isLoading) return <div className="nt-loading">Loading tracker timeline…</div>;
@@ -150,7 +192,20 @@ export function TrackerTimeline({ host }: EditorHostProps) {
               )}
             </div>
           )}
-          <input className="nt-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter trackers…" aria-label="Filter tracker items" />
+          {document.view.mode !== 'report' && (
+            <>
+              <ViewFilters
+                completionStates={document.filters.completionStates}
+                scheduleHealth={document.filters.scheduleHealth}
+                visibleCount={filteredItems.length}
+                totalCount={snapshot.items.length}
+                onToggleCompletion={toggleCompletionFilter}
+                onToggleSchedule={toggleScheduleFilter}
+                onReset={resetStateFilters}
+              />
+              <input className="nt-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter trackers…" aria-label="Search tracker items" />
+            </>
+          )}
         </div>
       </header>
 
@@ -186,6 +241,44 @@ export function TrackerTimeline({ host }: EditorHostProps) {
 
 function Metric({ label, value, tone = 'neutral' }: { label: string; value: number; tone?: string }) {
   return <div className={`nt-metric tone-${tone}`}><strong>{value}</strong><span>{label}</span></div>;
+}
+
+function ViewFilters({ completionStates, scheduleHealth, visibleCount, totalCount, onToggleCompletion, onToggleSchedule, onReset }: {
+  completionStates: CompletionState[];
+  scheduleHealth: ScheduleHealth[];
+  visibleCount: number;
+  totalCount: number;
+  onToggleCompletion: (state: CompletionState) => void;
+  onToggleSchedule: (state: ScheduleHealth) => void;
+  onReset: () => void;
+}) {
+  const isFiltered = completionStates.length !== 2 || scheduleHealth.length !== 3;
+  return (
+    <details className="nt-filter-menu">
+      <summary className={isFiltered ? 'active' : ''}>Filters <span>{visibleCount}/{totalCount}</span></summary>
+      <div className="nt-filter-popover">
+        <fieldset>
+          <legend>Completion</legend>
+          {(['active', 'complete'] as CompletionState[]).map((state) => (
+            <label key={state}>
+              <input type="checkbox" checked={completionStates.includes(state)} onChange={() => onToggleCompletion(state)} />
+              <span>{state === 'active' ? 'Active' : 'Complete'}</span>
+            </label>
+          ))}
+        </fieldset>
+        <fieldset>
+          <legend>Schedule health</legend>
+          {(['on-track', 'at-risk', 'late'] as ScheduleHealth[]).map((state) => (
+            <label key={state}>
+              <input type="checkbox" checked={scheduleHealth.includes(state)} onChange={() => onToggleSchedule(state)} />
+              <span>{titleCase(state.replace('-', ' '))}</span>
+            </label>
+          ))}
+        </fieldset>
+        <button type="button" onClick={onReset} disabled={!isFiltered}>Show all states</button>
+      </div>
+    </details>
+  );
 }
 
 function Watermark({ document }: { document: TimelineDocument }) {
@@ -464,6 +557,7 @@ function ItemDetails({ item, relationships, items, onSelect, onClose }: {
   onClose: () => void;
 }) {
   const itemsById = useMemo(() => new Map(items.map((entry) => [entry.id, entry])), [items]);
+  const pullRequest = pullRequestReference(item);
   const incidentRelationships = relationships
     .filter((edge) => edge.sourceId === item.id || edge.targetId === item.id)
     .map((edge) => ({ edge, inverse: edge.targetId === item.id }))
@@ -479,7 +573,10 @@ function ItemDetails({ item, relationships, items, onSelect, onClose }: {
         <button className="nt-details-close" onClick={onClose} aria-label="Hide item details" title="Hide item details">×</button>
       </div>
       <h2>{item.title}</h2>
-      <a className="nt-tracker-link" href={`nimbalyst://${encodeURIComponent(itemReference(item))}`}>{itemReference(item)} ↗</a>
+      <div className="nt-tracker-reference">
+        <span>Tracker item</span>
+        <TrackerReferenceChip referenceKey={itemReference(item)} variant="compact" />
+      </div>
       <div className="nt-state-stack">
         <StateLine label="Workflow" value={item.workflow || 'Not set'} className={`workflow-${slug(item.workflow)}`} />
         <StateLine label="Schedule" value={item.scheduleHealth} className={`health-${item.scheduleHealth}`} />
@@ -496,6 +593,12 @@ function ItemDetails({ item, relationships, items, onSelect, onClose }: {
         <div><dt>Impact × likelihood</dt><dd>{item.impact ?? '–'} × {item.likelihood ?? '–'} = {item.riskScore ?? '–'}</dd></div>
         <div><dt>Critical-path slack</dt><dd>{item.criticalPathSlackDays == null ? 'N/A' : `${item.criticalPathSlackDays}d`}</dd></div>
       </dl>
+      <section className="nt-pull-request" aria-label="Pull request reference">
+        <div><span>Pull request</span><strong>{pullRequest.number ? `#${pullRequest.number}` : 'Not referenced'}</strong></div>
+        {pullRequest.url
+          ? <a href={pullRequest.url} target="_blank" rel="noreferrer noopener">Open pull request ↗</a>
+          : <small>{pullRequest.number ? 'No GitHub URL is stored for this PR.' : 'Set pullRequestNumber or pullRequestUrl on the tracker item.'}</small>}
+      </section>
       {item.scheduleHealthReasons.length > 0 && <ReasonList title="Schedule rationale" entries={item.scheduleHealthReasons} />}
       {item.riskReasons.length > 0 && <ReasonList title="Risk rationale" entries={item.riskReasons} />}
       <RelationshipList entries={incidentRelationships} itemsById={itemsById} onSelect={onSelect} />

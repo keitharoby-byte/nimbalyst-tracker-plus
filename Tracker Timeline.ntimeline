@@ -9,7 +9,9 @@
     "fitToWidth": true
   },
   "filters": {
-    "includeUnscheduled": true
+    "includeUnscheduled": true,
+    "completionStates": ["active", "complete"],
+    "scheduleHealth": ["on-track", "at-risk", "late"]
   },
   "snapshot": {
     "generatedAt": "2026-07-14T23:50:40Z",
@@ -52,6 +54,8 @@
         "criticalPathSlackDays": null,
         "durationDays": 4,
         "isCritical": false,
+        "pullRequestNumber": 1,
+        "pullRequestUrl": "https://github.com/keitharoby-byte/nimbalyst-tracker-plus/pull/1",
         "updated": "2026-07-14T23:37:34.800Z"
       },
       {

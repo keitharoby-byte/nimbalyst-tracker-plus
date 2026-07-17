@@ -3,10 +3,86 @@ import test from 'node:test';
 
 import {
   activeUnscheduledItems,
+  derivedMilestoneProgress,
+  effectiveDeliverableProgress,
+  itemMatchesFilters,
   milestoneSummaries,
   orderByPrimaryMilestone,
   parseTimelineDocument,
+  pullRequestReference,
 } from '../src/timeline/model.ts';
+
+test('completion and schedule filters compose and pull request references stay safe', () => {
+  const document = parseTimelineDocument(JSON.stringify({
+    version: 2,
+    title: 'Filter fixture',
+    filters: {
+      completionStates: ['active'],
+      scheduleHealth: ['on-track', 'at-risk'],
+    },
+    snapshot: {
+      items: [
+        { id: 'active-track', primaryType: 'task', title: 'Active on track', status: 'in-progress', scheduleHealth: 'on-track' },
+        { id: 'active-late', primaryType: 'task', title: 'Active late', status: 'in-progress', scheduleHealth: 'late' },
+        { id: 'done-track', primaryType: 'task', title: 'Done on track', status: 'done', scheduleHealth: 'on-track' },
+        { id: 'pr-item', primaryType: 'task', title: 'PR-backed work', status: 'in-review', scheduleHealth: 'at-risk', pullRequestUrl: 'https://github.com/example/repo/pull/42' },
+      ],
+    },
+  }));
+
+  assert.deepEqual(
+    document.snapshot.items.filter((item) => itemMatchesFilters(item, document.filters)).map((item) => item.id),
+    ['active-track', 'pr-item'],
+  );
+  assert.deepEqual(pullRequestReference(document.snapshot.items[3]), {
+    number: 42,
+    url: 'https://github.com/example/repo/pull/42',
+  });
+  assert.deepEqual(pullRequestReference({ ...document.snapshot.items[3], pullRequestNumber: 7, pullRequestUrl: 'javascript:alert(1)' }), {
+    number: 7,
+    url: null,
+  });
+
+  const legacy = parseTimelineDocument(JSON.stringify({ version: 2, snapshot: { items: [] } }));
+  assert.deepEqual(legacy.filters.completionStates, ['active', 'complete']);
+  assert.deepEqual(legacy.filters.scheduleHealth, ['on-track', 'at-risk', 'late']);
+});
+
+test('milestone progress is derived from primary deliverables and ignores the stored milestone value', () => {
+  const deliverables = [
+    { id: 'd1', primaryType: 'task', typeTags: ['task'], title: 'One', workflow: 'in-review', progress: 80 },
+    { id: 'd2', primaryType: 'task', typeTags: ['task'], title: 'Two', workflow: 'in-review', progress: 90 },
+    { id: 'd3', primaryType: 'task', typeTags: ['task'], title: 'Three', workflow: 'in-review', progress: 98 },
+    { id: 'd4', primaryType: 'task', typeTags: ['task'], title: 'Four', workflow: 'in-progress', progress: 85 },
+  ];
+  const document = parseTimelineDocument(JSON.stringify({
+    version: 2,
+    title: 'Derived progress fixture',
+    snapshot: {
+      items: [
+        { id: 'milestone', primaryType: 'milestone', title: 'MR-R', workflow: 'in-progress', progress: 30 },
+        ...deliverables,
+      ],
+      relationships: deliverables.map((item, index) => ({
+        id: `link-${index}`,
+        sourceId: item.id,
+        targetId: 'milestone',
+        relationshipType: 'contributes-to',
+        state: 'active',
+        primaryContribution: true,
+      })),
+    },
+  }));
+
+  const summary = milestoneSummaries(document.snapshot)[0];
+  assert.equal(summary.progress, 88);
+  assert.equal(summary.complete, 0);
+  assert.equal(summary.deliverables.length, 4);
+  assert.equal(document.snapshot.milestones[0].progress, 88);
+  assert.equal(effectiveDeliverableProgress({ ...deliverables[0], workflow: 'done', progress: null }), 100);
+  assert.equal(effectiveDeliverableProgress({ ...deliverables[0], progress: null }), 0);
+  assert.equal(derivedMilestoneProgress([]), 0);
+});
 
 test('native projection relationships survive parsing and hydrate milestone dimensions', () => {
   const document = parseTimelineDocument(JSON.stringify({

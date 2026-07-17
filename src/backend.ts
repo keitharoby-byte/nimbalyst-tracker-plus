@@ -375,6 +375,7 @@ export async function activate(context: BackendContext): Promise<{
           ? existing.view
           : { mode: 'timeline', zoom: 'week', showUnscheduled: true, compactRows: true, fitToWidth: true, summaryRows: false },
         filters: {
+          ...(existing.filters && typeof existing.filters === 'object' ? existing.filters : {}),
           includeUnscheduled: params.includeUnscheduled,
           ...(params.from ? { from: params.from } : {}),
           ...(params.to ? { to: params.to } : {}),

@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -43,6 +44,9 @@ except ImportError:  # pragma: no cover - used when server.py runs as a script
         SCHEMA_ADAPTER,
         ReaderError,
     )
+
+
+COMPLETE_WORKFLOWS = {"done", "completed", "achieved", "closed", "shipped", "implemented"}
 
 
 class NativeTrackerReader:
@@ -224,6 +228,7 @@ class NativeTrackerReader:
         edges, relationship_findings = self._normalized_relationships(
             items, raw_fields_by_id, link_rows
         )
+        self._apply_derived_milestone_progress(items, edges)
         critical_path, analysis_findings = self._apply_timeline_analysis(items, edges)
         validation = [
             *relationship_findings,
@@ -256,6 +261,7 @@ class NativeTrackerReader:
         source["excludedUndatedEvidence"] = sum(
             not self._is_active_executable(item) for item in undated_items
         )
+        source["milestoneProgressSource"] = "active primary deliverables"
 
         for item in items:
             item.pop("_launchScopeExplicit", None)
@@ -305,7 +311,6 @@ class NativeTrackerReader:
         as_of = datetime.fromtimestamp(parsed["asOfMs"] / 1000, timezone.utc)
         lookahead = as_of + timedelta(days=parsed["lookaheadDays"])
         sections: list[dict[str, Any]] = []
-        done_statuses = {"done", "completed", "achieved", "closed", "shipped", "implemented"}
         risk_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
         schedule_order = {"on-track": 0, "at-risk": 1, "late": 2}
 
@@ -320,20 +325,20 @@ class NativeTrackerReader:
             ]
             deliverable_ids = {edge["sourceId"] for edge in contribution_edges}
             deliverables = [items_by_id[item_id] for item_id in deliverable_ids if item_id in items_by_id]
-            complete = [item for item in deliverables if str(item.get("workflow", "")).lower() in done_statuses]
+            complete = [item for item in deliverables if self._is_complete(item)]
             overdue = [
                 item
                 for item in deliverables
                 if (item.get("forecastDate") or item.get("dueDate"))
                 and self._parse_iso_ms(item.get("forecastDate") or item["dueDate"], "dueDate") < parsed["asOfMs"]
-                and str(item.get("workflow", "")).lower() not in done_statuses
+                and not self._is_complete(item)
             ]
             upcoming = [
                 item
                 for item in deliverables
                 if (item.get("forecastDate") or item.get("dueDate"))
                 and parsed["asOfMs"] <= self._parse_iso_ms(item.get("forecastDate") or item["dueDate"], "dueDate") <= int(lookahead.timestamp() * 1000)
-                and str(item.get("workflow", "")).lower() not in done_statuses
+                and not self._is_complete(item)
             ]
             relevant_ids = {milestone["id"], *deliverable_ids}
             active_dependencies = [
@@ -350,9 +355,7 @@ class NativeTrackerReader:
             waiting_items = [
                 item for item in relevant_items if item.get("executionConstraint") == "waiting"
             ]
-            progress = milestone.get("progress")
-            if not isinstance(progress, (int, float)):
-                progress = round((len(complete) / len(deliverables)) * 100) if deliverables else 0
+            progress = self._derived_milestone_progress(deliverables)
             workflow = str(milestone.get("workflow", "planned"))
             schedule_health = max(
                 (str(item.get("scheduleHealth", "on-track")) for item in relevant_items),
@@ -676,6 +679,114 @@ class NativeTrackerReader:
                 fields.setdefault(key, value)
         return fields
 
+    @classmethod
+    def _pull_request_fields(
+        cls,
+        fields: Mapping[str, Any],
+        type_tags: list[str],
+    ) -> tuple[int | None, str | None]:
+        nested = fields.get("pullRequest")
+        nested_fields = nested if isinstance(nested, Mapping) else {}
+        origin = fields.get("origin")
+        origin_fields = origin if isinstance(origin, Mapping) else {}
+        external = origin_fields.get("external")
+        external_fields = external if isinstance(external, Mapping) else {}
+        is_pull_request = bool(
+            {str(value).lower() for value in type_tags}.intersection(
+                {"mr", "merge-request", "pull-request", "change-request"}
+            )
+        )
+        url = next(
+            (
+                cls._bounded_string(value, 2048)
+                for value in (
+                    fields.get("pullRequestUrl"),
+                    fields.get("prUrl"),
+                    fields.get("githubPullRequestUrl"),
+                    nested_fields.get("url"),
+                    external_fields.get("url") if is_pull_request else None,
+                )
+                if cls._bounded_string(value, 2048)
+            ),
+            None,
+        )
+        number_raw = next(
+            (
+                value
+                for value in (
+                    fields.get("pullRequestNumber"),
+                    fields.get("prNumber"),
+                    fields.get("githubPullRequestNumber"),
+                    nested_fields.get("number"),
+                )
+                if value is not None
+            ),
+            None,
+        )
+        number = cls._bounded_integer(number_raw, 1, 999_999_999)
+        if number is None and isinstance(number_raw, str):
+            match = re.fullmatch(r"#?(\d+)", number_raw.strip())
+            number = int(match.group(1)) if match else None
+        if number is None and url:
+            match = re.search(r"/pull/(\d+)(?:[/?#]|$)", url, re.IGNORECASE)
+            number = int(match.group(1)) if match else None
+        if is_pull_request and (number is None or url is None):
+            urn = cls._bounded_string(external_fields.get("urn"), 1024)
+            match = re.fullmatch(r"github://([^/]+)/([^#]+)#(\d+)", urn or "")
+            if match:
+                number = number or int(match.group(3))
+                url = url or f"https://github.com/{match.group(1)}/{match.group(2)}/pull/{match.group(3)}"
+        return number, url
+
+    @staticmethod
+    def _is_complete(item: Mapping[str, Any]) -> bool:
+        return str(item.get("workflow", "")).lower() in COMPLETE_WORKFLOWS
+
+    @classmethod
+    def _effective_deliverable_progress(cls, item: Mapping[str, Any]) -> float:
+        if cls._is_complete(item):
+            return 100.0
+        progress = item.get("progress")
+        if isinstance(progress, bool) or not isinstance(progress, (int, float)):
+            return 0.0
+        return max(0.0, min(100.0, float(progress)))
+
+    @classmethod
+    def _derived_milestone_progress(cls, deliverables: list[Mapping[str, Any]]) -> int:
+        if not deliverables:
+            return 0
+        average = sum(cls._effective_deliverable_progress(item) for item in deliverables) / len(deliverables)
+        return int(average + 0.5)
+
+    @classmethod
+    def _apply_derived_milestone_progress(
+        cls,
+        items: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+    ) -> None:
+        items_by_id = {item["id"]: item for item in items}
+        milestone_ids = {
+            item["id"] for item in items if item.get("primaryType") == "milestone"
+        }
+        deliverables_by_milestone: dict[str, dict[str, dict[str, Any]]] = {
+            milestone_id: {} for milestone_id in milestone_ids
+        }
+        for edge in edges:
+            if (
+                edge.get("relationshipType") != "contributes-to"
+                or edge.get("state") != "active"
+                or not edge.get("primaryContribution")
+                or edge.get("targetId") not in milestone_ids
+            ):
+                continue
+            source = items_by_id.get(str(edge.get("sourceId")))
+            if source is not None:
+                deliverables_by_milestone[str(edge["targetId"])][source["id"]] = source
+        for milestone_id in milestone_ids:
+            items_by_id[milestone_id]["progress"] = cls._derived_milestone_progress(
+                list(deliverables_by_milestone[milestone_id].values())
+            )
+
     def _timeline_item(self, row: sqlite3.Row, fields: Mapping[str, Any]) -> dict[str, Any]:
         title = self._bounded_string(fields.get("title"), 500) or "Untitled tracker item"
         primary_type = str(row["type"])
@@ -711,6 +822,7 @@ class NativeTrackerReader:
             due_ms = self._parse_iso_ms(due_date, "dueDate")
             duration_days = max(1, round((due_ms - start_ms) / 86_400_000) + 1)
         launch_scope = self._bounded_string(fields.get("launchScope"), 40)
+        pull_request_number, pull_request_url = self._pull_request_fields(fields, type_tags)
         return {
             "id": str(row["id"]),
             "issueKey": row["issue_key"] if isinstance(row["issue_key"], str) else None,
@@ -745,6 +857,8 @@ class NativeTrackerReader:
             "criticalPathSlackDays": None,
             "durationDays": duration_days,
             "isCritical": False,
+            "pullRequestNumber": pull_request_number,
+            "pullRequestUrl": pull_request_url,
             "updated": self._date_time_string(row["updated"]),
         }
 

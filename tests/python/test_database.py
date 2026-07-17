@@ -209,6 +209,14 @@ class NativeTrackerReaderTests(unittest.TestCase):
             count = connection.execute("SELECT COUNT(*) FROM tracker_items").fetchone()[0]
         self.assertEqual(count, 2)
 
+    def test_imported_github_pull_request_urn_projects_number_and_url(self) -> None:
+        number, url = self.reader._pull_request_fields(
+            {"origin": {"external": {"urn": "github://example/repo#73"}}},
+            ["task", "pull-request"],
+        )
+        self.assertEqual(number, 73)
+        self.assertEqual(url, "https://github.com/example/repo/pull/73")
+
     def test_timeline_snapshot_projects_normalized_relationships_and_dimensions(self) -> None:
         self._insert_timeline_items()
 
@@ -225,6 +233,8 @@ class NativeTrackerReaderTests(unittest.TestCase):
             {"milestone-one", "timeline-one", "tracker-one"},
         )
         self.assertEqual(result["milestones"][0]["issueKey"], "NIM-10")
+        self.assertEqual(result["milestones"][0]["progress"], 25)
+        self.assertEqual(result["source"]["milestoneProgressSource"], "active primary deliverables")
         relationship_types = {edge["relationshipType"] for edge in result["relationships"]}
         self.assertEqual(
             relationship_types,
@@ -237,6 +247,11 @@ class NativeTrackerReaderTests(unittest.TestCase):
         self.assertEqual(timeline["riskLevel"], "critical")
         self.assertEqual(timeline["primaryMilestoneId"], "milestone-one")
         self.assertTrue(timeline["isCritical"])
+        self.assertEqual(timeline["pullRequestNumber"], 42)
+        self.assertEqual(
+            timeline["pullRequestUrl"],
+            "https://github.com/example/repo/pull/42",
+        )
         self.assertEqual(result["source"]["projectStateRevision"], "fixture-r7")
         self.assertFalse(any(finding["severity"] == "error" for finding in result["validation"]))
         serialized = json.dumps(result)
@@ -396,6 +411,7 @@ class NativeTrackerReaderTests(unittest.TestCase):
         self.assertEqual(section["scheduleHealth"], "late")
         self.assertEqual(section["riskLevel"], "critical")
         self.assertEqual(section["deliverableCount"], 1)
+        self.assertEqual(section["progress"], 25)
         self.assertEqual([item["id"] for item in section["overdue"]], ["timeline-one"])
         self.assertEqual([item["id"] for item in section["blockedItems"]], ["timeline-one"])
         self.assertEqual(len(section["activeDependencies"]), 1)
@@ -470,6 +486,7 @@ class NativeTrackerReaderTests(unittest.TestCase):
             "recoverability": "hard",
             "launchScope": "launch",
             "projectStateRevision": "fixture-r7",
+            "pullRequestUrl": "https://github.com/example/repo/pull/42",
         }
         with closing(sqlite3.connect(self.db_path)) as connection:
             for tracker_id, issue_key, tracker_type, data, tags in (

@@ -9,8 +9,8 @@
   height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   background: var(--nim-bg); color: var(--nim-text); font: 13px/1.4 Inter, ui-sans-serif, system-ui, sans-serif;
 }
-.nt-shell button, .nt-shell input { font: inherit; }
-.nt-shell button:focus-visible, .nt-shell a:focus-visible, .nt-shell input:focus-visible { outline: 2px solid var(--nim-primary); outline-offset: 2px; }
+.nt-shell button, .nt-shell input, .nt-shell summary { font: inherit; }
+.nt-shell button:focus-visible, .nt-shell a:focus-visible, .nt-shell input:focus-visible, .nt-shell summary:focus-visible { outline: 2px solid var(--nim-primary); outline-offset: 2px; }
 :root[data-theme="light"] .nt-shell,
 :root.light-theme .nt-shell,
 .nt-shell[data-theme="light"] {
@@ -40,6 +40,21 @@
 .nt-segmented .nt-critical-toggle.active { color: var(--nim-text); background: color-mix(in srgb, var(--nt-late) 18%, var(--nim-bg)); box-shadow: inset 0 0 0 1px var(--nt-late), 0 2px 8px color-mix(in srgb, var(--nt-late) 22%, transparent); }
 .nt-search { width: 190px; border: 1px solid var(--nim-border); border-radius: 8px; padding: 7px 10px; color: var(--nim-text); background: var(--nim-bg); outline: none; }
 .nt-search:focus { border-color: var(--nim-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--nim-primary) 18%, transparent); }
+.nt-filter-menu { position: relative; }
+.nt-filter-menu > summary { display: flex; align-items: center; gap: 6px; padding: 7px 9px; color: var(--nim-text-muted); border: 1px solid var(--nim-border); border-radius: 8px; background: var(--nim-bg); cursor: pointer; list-style: none; font-size: 11px; }
+.nt-filter-menu > summary::-webkit-details-marker { display: none; }
+.nt-filter-menu > summary::before { content: '≡'; color: var(--nim-text-muted); font-weight: 800; }
+.nt-filter-menu > summary span { padding: 1px 5px; border-radius: 999px; color: var(--nim-text); background: var(--nim-bg-tertiary); font-size: 9px; }
+.nt-filter-menu > summary.active, .nt-filter-menu[open] > summary { color: var(--nim-text); border-color: var(--nim-primary); background: color-mix(in srgb, var(--nim-primary) 9%, var(--nim-bg)); }
+.nt-filter-popover { position: absolute; top: calc(100% + 7px); right: 0; z-index: 30; width: 255px; box-sizing: border-box; display: grid; gap: 11px; padding: 13px; color: var(--nim-text); border: 1px solid var(--nim-border); border-radius: 10px; background: var(--nim-bg-secondary); box-shadow: 0 12px 34px rgb(0 0 0 / 24%); }
+.nt-filter-popover fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; border: 0; }
+.nt-filter-popover fieldset:nth-of-type(2) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.nt-filter-popover legend { grid-column: 1 / -1; margin-bottom: 4px; padding: 0; color: var(--nim-text-muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.nt-filter-popover label { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--nim-text); font-size: 10px; cursor: pointer; }
+.nt-filter-popover label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nt-filter-popover input { accent-color: var(--nim-primary); }
+.nt-filter-popover > button { justify-self: start; padding: 4px 7px; color: var(--nim-text); border: 1px solid var(--nim-border); border-radius: 6px; background: var(--nim-bg); cursor: pointer; font-size: 9px; }
+.nt-filter-popover > button:disabled { opacity: .45; cursor: default; }
 
 .nt-metrics { min-height: 43px; gap: 7px; padding: 0 18px; border-bottom: 1px solid var(--nim-border); background: var(--nim-bg); }
 .nt-metric { display: flex; align-items: baseline; gap: 5px; padding: 5px 9px; border-radius: 8px; background: var(--nim-bg-tertiary); }
@@ -211,7 +226,8 @@
 .nt-details-close:focus-visible { outline: 2px solid var(--nim-primary); outline-offset: 2px; }
 .nt-details h2 { margin: 5px 0 8px; font-size: 18px; line-height: 1.25; }
 .nt-kicker { padding-left: 6px; color: var(--nim-text); border-left: 3px solid var(--nim-primary); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
-.nt-tracker-link { color: var(--nim-text); text-decoration: underline; text-decoration-color: var(--nim-link, var(--nim-primary)); text-decoration-thickness: 2px; text-underline-offset: 2px; font-size: 11px; font-weight: 650; }
+.nt-tracker-reference { display: flex; align-items: center; justify-content: space-between; gap: 9px; min-height: 28px; }
+.nt-tracker-reference > span { color: var(--nim-text-muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .nt-state-stack { display: grid; gap: 5px; margin-top: 16px; }
 .nt-state-stack div { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border: 1px solid var(--nim-border); border-radius: 7px; background: var(--nim-bg); }
 .nt-state-stack span { color: var(--nim-text-muted); font-size: 9px; text-transform: uppercase; }
@@ -228,6 +244,12 @@
 .nt-detail-grid div { padding: 8px; border: 1px solid var(--nim-border); border-radius: 8px; background: var(--nim-bg); }
 .nt-detail-grid dt { color: var(--nim-text-muted); font-size: 8px; text-transform: uppercase; }
 .nt-detail-grid dd { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.nt-pull-request { display: grid; gap: 7px; margin-top: 14px; padding: 10px; border: 1px solid var(--nim-border); border-left: 3px solid var(--nim-link, var(--nim-primary)); border-radius: 8px; background: var(--nim-bg); }
+.nt-pull-request > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.nt-pull-request span { color: var(--nim-text-muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.nt-pull-request strong { color: var(--nim-text); }
+.nt-pull-request a { width: fit-content; color: var(--nim-text); text-decoration: underline; text-decoration-color: var(--nim-link, var(--nim-primary)); text-decoration-thickness: 2px; text-underline-offset: 2px; font-size: 10px; font-weight: 700; }
+.nt-pull-request small { color: var(--nim-text-muted); font-size: 9px; line-height: 1.4; }
 .nt-reason-list, .nt-relationship-list { margin-top: 16px; }
 .nt-reason-list h3, .nt-relationship-list h3 { margin: 0 0 6px; color: var(--nim-text-muted); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
 .nt-reason-list ul { margin: 0; padding-left: 17px; color: var(--nim-text-muted); font-size: 10px; }

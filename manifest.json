@@ -24,7 +24,7 @@
         "extension": ".ntimeline",
         "displayName": "Tracker Timeline",
         "icon": "view_timeline",
-        "defaultContent": "{\n  \"version\": 2,\n  \"title\": \"Tracker Timeline\",\n  \"view\": { \"mode\": \"timeline\", \"zoom\": \"week\", \"showUnscheduled\": true, \"compactRows\": true, \"fitToWidth\": true, \"summaryRows\": false },\n  \"filters\": { \"includeUnscheduled\": true },\n  \"snapshot\": { \"generatedAt\": null, \"items\": [], \"milestones\": [], \"relationships\": [], \"validation\": [], \"criticalPath\": { \"durationDays\": 0, \"itemIds\": [], \"cycleItemIds\": [] }, \"page\": { \"returned\": 0 }, \"source\": {} }\n}\n"
+        "defaultContent": "{\n  \"version\": 2,\n  \"title\": \"Tracker Timeline\",\n  \"view\": { \"mode\": \"timeline\", \"zoom\": \"week\", \"showUnscheduled\": true, \"compactRows\": true, \"fitToWidth\": true, \"summaryRows\": false },\n  \"filters\": { \"includeUnscheduled\": true, \"completionStates\": [\"active\", \"complete\"], \"scheduleHealth\": [\"on-track\", \"at-risk\", \"late\"] },\n  \"snapshot\": { \"generatedAt\": null, \"items\": [], \"milestones\": [], \"relationships\": [], \"validation\": [], \"criticalPath\": { \"durationDays\": 0, \"itemIds\": [], \"cycleItemIds\": [] }, \"page\": { \"returned\": 0 }, \"source\": {} }\n}\n"
       }
     ],
     "backendModules": [

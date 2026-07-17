@@ -1,4 +1,5 @@
 import type {
+  CompletionState,
   DependencyMode,
   ExecutionConstraint,
   MilestoneSummary,
@@ -16,6 +17,7 @@ import type {
 
 const DAY_MS = 86_400_000;
 const COMPLETE_WORKFLOWS = new Set(['done', 'completed', 'achieved', 'closed', 'shipped', 'implemented']);
+const COMPLETION_STATES = new Set<CompletionState>(['active', 'complete']);
 const EXECUTABLE_TYPES = new Set([
   'task',
   'timeline-item',
@@ -56,7 +58,11 @@ export function emptyTimelineDocument(): TimelineDocument {
     version: 2,
     title: 'Tracker Timeline',
     view: { mode: 'timeline', zoom: 'week', showUnscheduled: true, compactRows: true, fitToWidth: true, summaryRows: false },
-    filters: { includeUnscheduled: true },
+    filters: {
+      includeUnscheduled: true,
+      completionStates: ['active', 'complete'],
+      scheduleHealth: ['on-track', 'at-risk', 'late'],
+    },
     snapshot: {
       generatedAt: null,
       items: [],
@@ -94,6 +100,7 @@ export function parseTimelineDocument(raw: string): TimelineDocument {
     : [];
   for (const edge of relationships) edge.targetInSnapshot = itemIds.has(edge.targetId);
   hydrateRelationshipDimensions(items, relationships);
+  applyDerivedMilestoneProgress(items, relationships);
   const validation = Array.isArray(rawSnapshot.validation)
     ? rawSnapshot.validation.map(parseFinding).filter((finding): finding is ValidationFinding => finding !== null)
     : [];
@@ -136,6 +143,8 @@ export function parseTimelineDocument(raw: string): TimelineDocument {
     },
     filters: {
       includeUnscheduled: filters.includeUnscheduled !== false,
+      completionStates: enumArray(filters.completionStates, COMPLETION_STATES, ['active', 'complete']),
+      scheduleHealth: enumArray(filters.scheduleHealth, SCHEDULE_HEALTH, ['on-track', 'at-risk', 'late']),
       ...(typeof filters.from === 'string' ? { from: filters.from } : {}),
       ...(typeof filters.to === 'string' ? { to: filters.to } : {}),
     },
@@ -163,6 +172,59 @@ export function deriveTimelineRange(items: TimelineItem[]): { start: number; end
 
 export function isComplete(item: TimelineItem): boolean {
   return COMPLETE_WORKFLOWS.has(String(item.workflow ?? '').toLowerCase());
+}
+
+export function itemMatchesFilters(item: TimelineItem, filters: TimelineDocument['filters']): boolean {
+  const completionState: CompletionState = isComplete(item) ? 'complete' : 'active';
+  return filters.completionStates.includes(completionState)
+    && filters.scheduleHealth.includes(item.scheduleHealth);
+}
+
+export function pullRequestReference(item: TimelineItem): { number: number | null; url: string | null } {
+  const safeUrl = safeHttpsUrl(item.pullRequestUrl);
+  const number = positiveInteger(item.pullRequestNumber) ?? pullRequestNumberFromUrl(safeUrl);
+  return { number, url: safeUrl };
+}
+
+export function effectiveDeliverableProgress(item: TimelineItem): number {
+  if (isComplete(item)) return 100;
+  if (typeof item.progress !== 'number' || !Number.isFinite(item.progress)) return 0;
+  return Math.max(0, Math.min(100, item.progress));
+}
+
+export function derivedMilestoneProgress(deliverables: TimelineItem[]): number {
+  if (!deliverables.length) return 0;
+  const total = deliverables.reduce((sum, item) => sum + effectiveDeliverableProgress(item), 0);
+  return Math.round(total / deliverables.length);
+}
+
+function primaryDeliverables(
+  items: TimelineItem[],
+  relationships: TimelineRelationship[],
+  milestoneId: string,
+): TimelineItem[] {
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const deliverables = new Map<string, TimelineItem>();
+  for (const edge of relationships) {
+    if (
+      edge.relationshipType !== 'contributes-to'
+      || edge.targetId !== milestoneId
+      || edge.state !== 'active'
+      || !edge.primaryContribution
+    ) continue;
+    const item = itemsById.get(edge.sourceId);
+    if (item) deliverables.set(item.id, item);
+  }
+  return [...deliverables.values()];
+}
+
+function applyDerivedMilestoneProgress(
+  items: TimelineItem[],
+  relationships: TimelineRelationship[],
+): void {
+  for (const milestone of items.filter((item) => item.primaryType === 'milestone')) {
+    milestone.progress = derivedMilestoneProgress(primaryDeliverables(items, relationships, milestone.id));
+  }
 }
 
 export function isActiveExecutableItem(item: TimelineItem): boolean {
@@ -255,17 +317,9 @@ export function relationshipLabel(edge: TimelineRelationship, inverse = false): 
 }
 
 export function milestoneSummaries(snapshot: TimelineSnapshot, now = new Date()): MilestoneSummary[] {
-  const itemsById = new Map(snapshot.items.map((item) => [item.id, item]));
   const today = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / DAY_MS);
   return snapshot.milestones.map((milestone) => {
-    const contributionEdges = snapshot.relationships.filter((edge) =>
-      edge.relationshipType === 'contributes-to'
-      && edge.targetId === milestone.id
-      && edge.state === 'active'
-      && edge.primaryContribution);
-    const deliverables = contributionEdges
-      .map((edge) => itemsById.get(edge.sourceId))
-      .filter((item): item is TimelineItem => Boolean(item));
+    const deliverables = primaryDeliverables(snapshot.items, snapshot.relationships, milestone.id);
     const complete = deliverables.filter(isComplete).length;
     const overdue = deliverables.filter((item) => {
       const due = dayNumber(item.forecastDate ?? item.dueDate);
@@ -279,9 +333,7 @@ export function milestoneSummaries(snapshot: TimelineSnapshot, now = new Date())
     const relevantItems = [milestone, ...deliverables];
     const blockedItems = relevantItems.filter((item) => item.executionConstraint === 'blocked');
     const waitingItems = relevantItems.filter((item) => item.executionConstraint === 'waiting');
-    const progress = typeof milestone.progress === 'number'
-      ? milestone.progress
-      : deliverables.length ? Math.round((complete / deliverables.length) * 100) : 0;
+    const progress = derivedMilestoneProgress(deliverables);
     const scheduleHealth: MilestoneSummary['scheduleHealth'] = isComplete(milestone)
       ? 'achieved'
       : worstScheduleHealth(relevantItems.map((item) => item.scheduleHealth));
@@ -340,6 +392,8 @@ function parseItem(raw: unknown): TimelineItem | null {
     criticalPathSlackDays: finiteNumber(raw.criticalPathSlackDays),
     durationDays: Math.max(1, Math.round(finiteNumber(raw.durationDays) ?? 1)),
     isCritical: raw.isCritical === true,
+    pullRequestNumber: positiveInteger(raw.pullRequestNumber) ?? pullRequestNumberFromUrl(stringValue(raw.pullRequestUrl)),
+    pullRequestUrl: stringValue(raw.pullRequestUrl),
     updated: stringValue(raw.updated),
   };
 }
@@ -459,6 +513,11 @@ function enumValue<T extends string>(raw: unknown, allowed: Set<T>): T | undefin
   return typeof raw === 'string' && allowed.has(raw as T) ? raw as T : undefined;
 }
 
+function enumArray<T extends string>(raw: unknown, allowed: Set<T>, fallback: T[]): T[] {
+  if (!Array.isArray(raw)) return [...fallback];
+  return [...new Set(raw.filter((value): value is T => typeof value === 'string' && allowed.has(value as T)))];
+}
+
 function stringValue(raw: unknown): string | null {
   return typeof raw === 'string' && raw.trim() ? raw : null;
 }
@@ -480,6 +539,27 @@ function relationshipItemIds(raw: unknown): string[] {
 
 function finiteNumber(raw: unknown): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+}
+
+function positiveInteger(raw: unknown): number | null {
+  if (typeof raw === 'string' && /^#?\d+$/.test(raw.trim())) raw = Number(raw.trim().replace(/^#/, ''));
+  return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : null;
+}
+
+function safeHttpsUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:' ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function pullRequestNumberFromUrl(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const match = raw.match(/\/pull\/(\d+)(?:[/?#]|$)/i);
+  return match ? positiveInteger(match[1]) : null;
 }
 
 function boundedInteger(raw: unknown, min: number, max: number): number | null {

@@ -43,9 +43,9 @@ upgrade in place despite the broader Tracker+ name.
 The workspace includes three native custom tracker types:
 
 - `timeline-item` separates workflow, schedule health, execution constraint,
-  risk inputs, forecasts, and launch scope.
+  risk inputs, forecasts, launch scope, and optional pull-request number/URL.
 - `milestone` uses the same independent state dimensions plus milestone target,
-  gate, forecast, and reporting fields.
+  gate, forecast, reporting, and optional pull-request reference fields.
 - `timeline-link` stores one normalized relationship edge as a native tracker
   record with stable ID, source, type, target, state, dependency controls,
   evidence, provenance, and effective revision.
@@ -67,9 +67,20 @@ In compact mode, **Critical path** toggles a red outline on calculated path
 rows. **Summaries** optionally groups a task beneath its one active primary
 milestone contribution; dependency edges never imply hierarchy.
 
+**Filters** opens persistent multi-select controls for Completion (`Active` or
+`Complete`) and Schedule health (`On track`, `At risk`, or `Late`). Values are
+ORed within each group and ANDed between groups, so excluding `Complete` hides
+finished work without changing schedule-health meaning. The active filter and
+visible-item count apply to Timeline and Graph and survive a tracker re-sync.
+
 The item inspector is hidden by default so the timeline uses the full editor
 width. Selecting an item opens it contextually, and its close button clears the
-selection and collapses the inspector again.
+selection and collapses the inspector again. Its tracker-reference chip uses
+Nimbalyst's live contextual navigation. A separate pull-request section shows
+`pullRequestNumber` and opens `pullRequestUrl` when it is a valid HTTPS URL; a
+number-only reference remains visible when no GitHub URL has been stored.
+Imported GitHub pull-request items can also resolve this section from their
+native `github://owner/repository#number` origin reference.
 
 Tracker+ derives its palette from Nimbalyst's semantic theme variables rather
 than assigning fixed purple, blue, gray, green, amber, or red fills. Timeline

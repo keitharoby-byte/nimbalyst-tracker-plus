@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Add persistent multi-select Completion and Schedule health filters to the
+  Timeline and Graph views, including a one-click reset and visible-item count.
+- Replace the hand-built tracker URI with Nimbalyst's live tracker-reference
+  chip so inspector navigation resolves through the host.
+- Project pull-request numbers and HTTPS URLs from native tracker fields or an
+  imported GitHub origin URN, and retain the PR number when no URL is available.
+- Preserve state-filter preferences when a timeline is re-synced and validate
+  the combined filter and safe-link behavior in the automated suite.
+
 ## 0.3.0 - 2026-07-14
 
 - Rename the public extension and repository from the comment-reader-specific

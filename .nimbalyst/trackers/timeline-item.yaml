@@ -175,6 +175,12 @@ fields:
     displayInline: true
   - name: gate
     type: string
+  - name: pullRequestNumber
+    type: number
+    min: 1
+    displayInline: true
+  - name: pullRequestUrl
+    type: string
   - name: projectStateRevision
     type: string
   - name: summary
@@ -203,6 +209,7 @@ tableView:
     - forecastDate
     - progress
     - owner
+    - pullRequestNumber
   sortable: true
   filterable: true
   exportable: true

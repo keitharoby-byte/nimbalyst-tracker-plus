@@ -159,6 +159,12 @@ fields:
     required: true
   - name: gate
     type: string
+  - name: pullRequestNumber
+    type: number
+    min: 1
+    displayInline: true
+  - name: pullRequestUrl
+    type: string
   - name: reportCadence
     type: select
     default: on-demand
@@ -208,6 +214,7 @@ tableView:
     - forecastDate
     - progress
     - owner
+    - pullRequestNumber
   sortable: true
   filterable: true
   exportable: true

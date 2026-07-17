@@ -1,5 +1,6 @@
 export type TimelineMode = 'timeline' | 'graph' | 'report';
 export type TimelineZoom = 'day' | 'week' | 'month';
+export type CompletionState = 'active' | 'complete';
 export type ScheduleHealth = 'on-track' | 'at-risk' | 'late';
 export type ExecutionConstraint = 'clear' | 'waiting' | 'blocked' | 'paused';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
@@ -48,6 +49,8 @@ export interface TimelineItem {
   criticalPathSlackDays?: number | null;
   durationDays: number;
   isCritical: boolean;
+  pullRequestNumber?: number | null;
+  pullRequestUrl?: string | null;
   updated?: string | null;
 }
 
@@ -130,6 +133,8 @@ export interface TimelineDocument {
   };
   filters: {
     includeUnscheduled: boolean;
+    completionStates: CompletionState[];
+    scheduleHealth: ScheduleHealth[];
     from?: string;
     to?: string;
   };
