@@ -30,10 +30,15 @@ const EXECUTABLE_TYPES = new Set([
   'change-request',
 ]);
 const RELATIONSHIP_TYPES = new Set<RelationshipType>([
+  'part-of-launch',
+  'governs',
   'depends-on',
   'contributes-to',
   'reviews',
   'evidences',
+  'precedes',
+  'enables',
+  'coordinates-with',
   'implements',
   'related',
 ]);
@@ -45,10 +50,15 @@ const DEPENDENCY_MODES = new Set<DependencyMode>(['finish-to-start', 'start-to-s
 const HARDNESS_LEVELS = new Set<RelationshipHardness>(['hard-serial', 'shared-resource', 'soft-coordination']);
 
 export const RELATIONSHIP_LABELS: Record<RelationshipType, { forward: string; inverse: string }> = {
+  'part-of-launch': { forward: 'Part of launch', inverse: 'Contains launch member' },
+  governs: { forward: 'Governs', inverse: 'Is governed by' },
   'depends-on': { forward: 'Depends on', inverse: 'Is predecessor of' },
   'contributes-to': { forward: 'Contributes to', inverse: 'Receives contribution from' },
   reviews: { forward: 'Reviews', inverse: 'Is reviewed by' },
   evidences: { forward: 'Evidences', inverse: 'Is evidenced by' },
+  precedes: { forward: 'Precedes', inverse: 'Follows' },
+  enables: { forward: 'Enables', inverse: 'Is enabled by' },
+  'coordinates-with': { forward: 'Coordinates with', inverse: 'Coordinates with' },
   implements: { forward: 'Implements', inverse: 'Is implemented by' },
   related: { forward: 'Related to', inverse: 'Related to' },
 };
@@ -108,7 +118,7 @@ export function parseTimelineDocument(raw: string): TimelineDocument {
   const snapshot: TimelineSnapshot = {
     generatedAt: typeof rawSnapshot.generatedAt === 'string' ? rawSnapshot.generatedAt : null,
     items,
-    milestones: items.filter((item) => item.primaryType === 'milestone'),
+    milestones: items.filter((item) => item.primaryType === 'milestone' && !item.boundary),
     relationships,
     validation,
     criticalPath: {
@@ -147,6 +157,7 @@ export function parseTimelineDocument(raw: string): TimelineDocument {
       scheduleHealth: enumArray(filters.scheduleHealth, SCHEDULE_HEALTH, ['on-track', 'at-risk', 'late']),
       ...(typeof filters.from === 'string' ? { from: filters.from } : {}),
       ...(typeof filters.to === 'string' ? { to: filters.to } : {}),
+      ...(typeof filters.launch === 'string' ? { launch: filters.launch } : {}),
     },
     snapshot,
   };
@@ -178,6 +189,27 @@ export function itemMatchesFilters(item: TimelineItem, filters: TimelineDocument
   const completionState: CompletionState = isComplete(item) ? 'complete' : 'active';
   return filters.completionStates.includes(completionState)
     && filters.scheduleHealth.includes(item.scheduleHealth);
+}
+
+export function launchFilterSelection(
+  snapshot: TimelineSnapshot,
+  launch: string | undefined,
+): { itemIds: Set<string>; memberIds: Set<string>; boundaryIds: Set<string>; rootId: string | null } {
+  if (!launch) {
+    return { itemIds: new Set(snapshot.items.map((item) => item.id)), memberIds: new Set(), boundaryIds: new Set(), rootId: null };
+  }
+  const root = snapshot.items.find((item) => item.primaryType === 'launch' && [item.id, item.issueKey, item.launchKey].includes(launch));
+  if (!root) return { itemIds: new Set(), memberIds: new Set(), boundaryIds: new Set(), rootId: null };
+  const memberships = snapshot.relationships.filter((edge) => edge.relationshipType === 'part-of-launch' && edge.state === 'active' && edge.targetId === root.id);
+  const memberIds = new Set(memberships.map((edge) => edge.sourceId));
+  const scopeIds = new Set([root.id, ...memberIds]);
+  const boundaryIds = new Set<string>();
+  for (const edge of snapshot.relationships) {
+    if (edge.state !== 'active' || edge.relationshipType === 'part-of-launch') continue;
+    if (scopeIds.has(edge.sourceId) && !scopeIds.has(edge.targetId)) boundaryIds.add(edge.targetId);
+    if (scopeIds.has(edge.targetId) && !scopeIds.has(edge.sourceId)) boundaryIds.add(edge.sourceId);
+  }
+  return { itemIds: new Set([...scopeIds, ...boundaryIds]), memberIds, boundaryIds, rootId: root.id };
 }
 
 export function pullRequestReference(item: TimelineItem): { number: number | null; url: string | null } {
@@ -213,7 +245,7 @@ function primaryDeliverables(
       || !edge.primaryContribution
     ) continue;
     const item = itemsById.get(edge.sourceId);
-    if (item) deliverables.set(item.id, item);
+    if (item && !item.boundary) deliverables.set(item.id, item);
   }
   return [...deliverables.values()];
 }
@@ -222,7 +254,7 @@ function applyDerivedMilestoneProgress(
   items: TimelineItem[],
   relationships: TimelineRelationship[],
 ): void {
-  for (const milestone of items.filter((item) => item.primaryType === 'milestone')) {
+  for (const milestone of items.filter((item) => item.primaryType === 'milestone' && !item.boundary)) {
     milestone.progress = derivedMilestoneProgress(primaryDeliverables(items, relationships, milestone.id));
   }
 }
@@ -387,6 +419,9 @@ function parseItem(raw: unknown): TimelineItem | null {
     capacityPressure: stringValue(raw.capacityPressure),
     gate: stringValue(raw.gate),
     launchScoped: raw.launchScoped === true || raw.launchScope === 'launch',
+    launchKey: stringValue(raw.launchKey),
+    launchMember: raw.launchMember === true,
+    boundary: raw.boundary === true,
     primaryMilestoneId: stringValue(raw.primaryMilestoneId),
     scheduleSlackDays: finiteNumber(raw.scheduleSlackDays),
     criticalPathSlackDays: finiteNumber(raw.criticalPathSlackDays),
@@ -435,6 +470,8 @@ function parseRelationship(raw: unknown): TimelineRelationship | null {
     clearingCondition: stringValue(raw.clearingCondition),
     ownerLabel: stringValue(raw.ownerLabel),
     primaryContribution: raw.primaryContribution === true || raw.contributionRole === 'primary' || legacyKind === 'milestone',
+    contributionRole: stringValue(raw.contributionRole),
+    scopeRole: stringValue(raw.scopeRole),
     entryEvidenceIds: relationshipItemIds(raw.entryEvidenceIds ?? raw.entryEvidence),
     exitEvidenceIds: relationshipItemIds(raw.exitEvidenceIds ?? raw.exitEvidence),
     evidenceSourceIds: relationshipItemIds(raw.evidenceSourceIds ?? raw.evidenceSources),

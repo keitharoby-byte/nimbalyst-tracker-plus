@@ -6,6 +6,7 @@ import {
   derivedMilestoneProgress,
   effectiveDeliverableProgress,
   itemMatchesFilters,
+  launchFilterSelection,
   milestoneSummaries,
   orderByPrimaryMilestone,
   parseTimelineDocument,
@@ -46,6 +47,29 @@ test('completion and schedule filters compose and pull request references stay s
   const legacy = parseTimelineDocument(JSON.stringify({ version: 2, snapshot: { items: [] } }));
   assert.deepEqual(legacy.filters.completionStates, ['active', 'complete']);
   assert.deepEqual(legacy.filters.scheduleHealth, ['on-track', 'at-risk', 'late']);
+});
+
+test('launch filter keeps explicit members and marks one-hop context as boundary', () => {
+  const document = parseTimelineDocument(JSON.stringify({
+    version: 2,
+    filters: { launch: 'FFP-1' },
+    snapshot: {
+      items: [
+        { id: 'launch', issueKey: 'LAUNCH-1', launchKey: 'FFP-1', primaryType: 'launch', title: 'Launch' },
+        { id: 'member', primaryType: 'task', title: 'Member' },
+        { id: 'boundary', primaryType: 'milestone', title: 'Prior' },
+        { id: 'unrelated', primaryType: 'task', title: 'Other' },
+      ],
+      relationships: [
+        { id: 'membership', sourceId: 'member', targetId: 'launch', relationshipType: 'part-of-launch', state: 'active', scopeRole: 'core' },
+        { id: 'dependency', sourceId: 'member', targetId: 'boundary', relationshipType: 'depends-on', state: 'active' },
+      ],
+    },
+  }));
+  const selection = launchFilterSelection(document.snapshot, document.filters.launch);
+  assert.deepEqual([...selection.itemIds].sort(), ['boundary', 'launch', 'member']);
+  assert.deepEqual([...selection.memberIds], ['member']);
+  assert.deepEqual([...selection.boundaryIds], ['boundary']);
 });
 
 test('milestone progress is derived from primary deliverables and ignores the stored milestone value', () => {

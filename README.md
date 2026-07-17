@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.3.0 is Windows-first and was validated with Nimbalyst 0.68.1. Because
+Version 0.4.0 is Windows-first and was validated with Nimbalyst 0.68.1. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID,
@@ -22,7 +22,18 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ in the Midnight Orchid extension theme">
 </p>
 
-## What's new in 0.3.0
+## What's new in 0.4.0
+
+- Add `launch` items and explicit `part-of-launch` membership with separate
+  scope roles, lifecycle validation, nested-launch rollups, and hard blockers.
+- Add bounded predicate queries and rooted graph traversal with saved role and
+  launch templates, boundary nodes, cursor paging, and auditable watermarks.
+- Move terminal states, relationship vocabulary, roles, caps, and saved queries
+  into a versioned registry with a safe read-only workspace override.
+- Add launch-rooted timeline sync plus a persistent launch selector and
+  member/boundary/truncation/validation disclosure in the custom editor.
+
+## Previously in 0.3.0
 
 - Model workflow, schedule health, execution constraints, and risk as separate
   dimensions so a dependency does not automatically mean an item is blocked.
@@ -54,7 +65,8 @@ Relationship truth is stored once as:
 
 `source item → relationship type → target item`
 
-Supported types are `depends-on`, `contributes-to`, `reviews`, `evidences`,
+Supported types are `part-of-launch`, `governs`, `contributes-to`, `reviews`,
+`evidences`, `depends-on`, `precedes`, `enables`, `coordinates-with`,
 `implements`, and `related`. Backlinks and inverse labels are derived from the
 single edge record. A dependency describes topology; it does not set the
 source item's execution constraint to blocked.
@@ -107,6 +119,10 @@ examples, filter behavior, PR references, and recovery steps.
 
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.
+- `native_tracker_query` runs bounded cursor-paged predicates or saved role
+  queries.
+- `native_tracker_traverse` returns rooted members, edges, boundary context,
+  launch rollups, validation, and provenance.
 - `native_tracker_sync_timeline` projects current native tracker data into a
   workspace-relative `.ntimeline` document.
 - `native_tracker_generate_milestone_report` writes a bounded Markdown report

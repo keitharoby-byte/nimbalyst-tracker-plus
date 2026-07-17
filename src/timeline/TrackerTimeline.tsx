@@ -10,6 +10,7 @@ import {
   deriveTimelineRange,
   emptyTimelineDocument,
   itemMatchesFilters,
+  launchFilterSelection,
   itemReference,
   milestoneSummaries,
   orderByPrimaryMilestone,
@@ -110,13 +111,23 @@ export function TrackerTimeline({ host }: EditorHostProps) {
     }));
   }, [updateDocument]);
 
+  const setLaunchFilter = useCallback((launch: string) => {
+    updateDocument((current) => ({
+      ...current,
+      filters: { ...current.filters, ...(launch ? { launch } : { launch: undefined }) },
+    }));
+  }, [updateDocument]);
+
   useEffect(() => {
     if (!document.view.compactRows) setHighlightCriticalPath(false);
   }, [document.view.compactRows]);
 
   const filteredItems = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    const stateFiltered = document.snapshot.items.filter((item) => itemMatchesFilters(item, document.filters));
+    const launchSelection = launchFilterSelection(document.snapshot, document.filters.launch);
+    const stateFiltered = document.snapshot.items
+      .filter((item) => launchSelection.itemIds.has(item.id) && itemMatchesFilters(item, document.filters))
+      .map((item) => ({ ...item, boundary: item.boundary === true || launchSelection.boundaryIds.has(item.id), launchMember: item.launchMember === true || launchSelection.memberIds.has(item.id) }));
     if (!needle) return stateFiltered;
     return stateFiltered.filter((item) => [
       item.title,
@@ -129,7 +140,7 @@ export function TrackerTimeline({ host }: EditorHostProps) {
       item.ownerLabel,
       ...item.typeTags,
     ].some((value) => String(value ?? '').toLowerCase().includes(needle)));
-  }, [document.filters, document.snapshot.items, search]);
+  }, [document.filters, document.snapshot, search]);
 
   const selected = useMemo(
     () => document.snapshot.items.find((item) => item.id === selectedId) ?? null,
@@ -150,6 +161,9 @@ export function TrackerTimeline({ host }: EditorHostProps) {
   const blocked = snapshot.items.filter((item) => item.executionConstraint === 'blocked').length;
   const errors = snapshot.validation.filter((finding) => finding.severity === 'error').length;
   const truncated = snapshot.page.queryTruncated || snapshot.page.responseTruncated;
+  const launchSelection = launchFilterSelection(snapshot, document.filters.launch);
+  const launchOptions = snapshot.items.filter((item) => item.primaryType === 'launch');
+  const validationState = errors > 0 ? 'fail' : snapshot.validation.length > 0 ? 'warn' : 'pass';
 
   return (
     <div className="nt-shell" data-theme={theme}>
@@ -194,6 +208,10 @@ export function TrackerTimeline({ host }: EditorHostProps) {
           )}
           {document.view.mode !== 'report' && (
             <>
+              <select className="nt-launch-filter" value={document.filters.launch ?? ''} onChange={(event) => setLaunchFilter(event.target.value)} aria-label="Launch filter">
+                <option value="">All launches</option>
+                {launchOptions.map((item) => <option key={item.id} value={item.launchKey || item.issueKey || item.id}>{item.launchKey || item.issueKey || item.title}</option>)}
+              </select>
               <ViewFilters
                 completionStates={document.filters.completionStates}
                 scheduleHealth={document.filters.scheduleHealth}
@@ -216,6 +234,10 @@ export function TrackerTimeline({ host }: EditorHostProps) {
         <Metric label="At risk / late" value={attention} tone="amber" />
         <Metric label="Execution blocked" value={blocked} tone="red" />
         <Metric label="Validation errors" value={errors} tone="red" />
+        <span className="nt-disclosure">Launch <strong>{document.filters.launch || 'all'}</strong></span>
+        <span className="nt-disclosure">Members <strong>{launchSelection.memberIds.size}</strong></span>
+        <span className="nt-disclosure">Boundary <strong>{launchSelection.boundaryIds.size}</strong></span>
+        <span className={`nt-disclosure state-${validationState}`}>Validation <strong>{validationState}</strong></span>
         {truncated && <span className="nt-warning">Snapshot is bounded; refine filters to see all items.</span>}
       </div>
 
@@ -391,7 +413,7 @@ function TimelineView({ items, allItems, relationships, criticalPathIds, highlig
           const forecastLeft = forecastEnd === null ? null : Math.max(0, (forecastEnd - range.start) * pxPerDay);
           return (
             <React.Fragment key={item.id}>
-              <button className={`nt-row-label nt-sticky-label ${selectedId === item.id ? 'selected' : ''} ${isCriticalPath ? 'nt-critical-path-item' : ''} ${isSummary ? 'nt-summary-row' : ''} ${isSummaryChild ? 'nt-summary-child' : ''}`} onClick={() => onSelect(item.id)}>
+              <button className={`nt-row-label nt-sticky-label ${selectedId === item.id ? 'selected' : ''} ${isCriticalPath ? 'nt-critical-path-item' : ''} ${isSummary ? 'nt-summary-row' : ''} ${isSummaryChild ? 'nt-summary-child' : ''} ${item.boundary ? 'nt-boundary' : ''}`} onClick={() => onSelect(item.id)}>
                 <span className={`nt-type-dot workflow-${slug(item.workflow)}`} />
                 <span className="nt-row-copy"><strong>{item.title}</strong><small>{itemReference(item)} · {item.workflow || 'unset'} / {item.executionConstraint}{isSummary ? ` · ${primaryChildCount.get(item.id) ?? 0} primary items` : ''}</small></span>
                 {item.isCritical && <span className="nt-critical-badge">critical path</span>}
@@ -479,7 +501,7 @@ function GraphView({ items, relationships, selectedId, onSelect }: {
           const position = positions.get(item.id)!;
           const isMilestone = item.primaryType === 'milestone';
           return (
-            <g key={item.id} className={`nt-node health-${item.scheduleHealth} ${selectedId === item.id ? 'selected' : ''}`} transform={`translate(${position.x - 105} ${position.y - 38})`} onClick={() => onSelect(item.id)} role="button">
+            <g key={item.id} className={`nt-node health-${item.scheduleHealth} ${selectedId === item.id ? 'selected' : ''} ${item.boundary ? 'nt-boundary' : ''}`} transform={`translate(${position.x - 105} ${position.y - 38})`} onClick={() => onSelect(item.id)} role="button">
               <rect width="210" height="76" rx={isMilestone ? 18 : 9} className={isMilestone ? 'milestone' : ''} />
               <circle cx="16" cy="20" r="5" className={`workflow-${slug(item.workflow)}`} />
               <text x="28" y="24" className="nt-node-title">{truncate(item.title, 25)}</text>

@@ -40,6 +40,7 @@
 .nt-segmented .nt-critical-toggle.active { color: var(--nim-text); background: color-mix(in srgb, var(--nt-late) 18%, var(--nim-bg)); box-shadow: inset 0 0 0 1px var(--nt-late), 0 2px 8px color-mix(in srgb, var(--nt-late) 22%, transparent); }
 .nt-search { width: 190px; border: 1px solid var(--nim-border); border-radius: 8px; padding: 7px 10px; color: var(--nim-text); background: var(--nim-bg); outline: none; }
 .nt-search:focus { border-color: var(--nim-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--nim-primary) 18%, transparent); }
+.nt-launch-filter { min-width: 150px; border: 1px solid var(--nim-border); border-radius: 8px; padding: 7px 9px; color: var(--nim-text); background: var(--nim-bg); }
 .nt-filter-menu { position: relative; }
 .nt-filter-menu > summary { display: flex; align-items: center; gap: 6px; padding: 7px 9px; color: var(--nim-text-muted); border: 1px solid var(--nim-border); border-radius: 8px; background: var(--nim-bg); cursor: pointer; list-style: none; font-size: 11px; }
 .nt-filter-menu > summary::-webkit-details-marker { display: none; }
@@ -57,6 +58,9 @@
 .nt-filter-popover > button:disabled { opacity: .45; cursor: default; }
 
 .nt-metrics { min-height: 43px; gap: 7px; padding: 0 18px; border-bottom: 1px solid var(--nim-border); background: var(--nim-bg); }
+.nt-disclosure { color: var(--nim-text-muted); font-size: 11px; white-space: nowrap; }
+.nt-disclosure strong { color: var(--nim-text); }
+.nt-boundary { outline: 2px dashed var(--nim-text-muted) !important; outline-offset: -2px; opacity: .82; }
 .nt-metric { display: flex; align-items: baseline; gap: 5px; padding: 5px 9px; border-radius: 8px; background: var(--nim-bg-tertiary); }
 .nt-metric strong { font-size: 14px; }
 .nt-metric span { color: var(--nim-text-muted); font-size: 10px; }

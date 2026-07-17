@@ -1,8 +1,8 @@
 {
   "id": "com.prediclear.nimbalyst-native-tracker-comments",
   "name": "Tracker+",
-  "version": "0.3.0",
-  "description": "Project native tracker topology, schedule health, execution constraints, risk, critical paths, and milestone controls.",
+  "version": "0.4.0",
+  "description": "Query and traverse launch relationships, project tracker timelines, and report schedule, risk, and milestone controls.",
   "author": "PrediClear",
   "main": "dist/index.js",
   "styles": "dist/index.css",

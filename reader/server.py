@@ -63,6 +63,10 @@ def handle(request: Any, reader: NativeTrackerReader) -> dict[str, Any]:
         result = reader.timeline_snapshot(params)
     elif method == "milestone_report":
         result = reader.milestone_report(params)
+    elif method == "query_items":
+        result = reader.query_items(params)
+    elif method == "traverse_graph":
+        result = reader.traverse_graph(params)
     else:
         raise ReaderError("METHOD_NOT_FOUND", "The requested native tracker operation is not supported.")
     return {"id": request_id, "ok": True, "result": result}

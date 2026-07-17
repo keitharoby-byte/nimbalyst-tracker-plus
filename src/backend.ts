@@ -6,7 +6,9 @@ import {
   TOOL_GET_WITH_COMMENTS,
   TOOL_LIST_COMMENTS,
   TOOL_MILESTONE_REPORT,
+  TOOL_QUERY,
   TOOL_SYNC_TIMELINE,
+  TOOL_TRAVERSE,
   type BackendContext,
   type McpToolDescriptor,
   type ReaderMethod,
@@ -15,8 +17,10 @@ import { NativeTrackerError, safeErrorResult } from './errors';
 import { PythonBridge } from './pythonBridge';
 
 const COMMENT_ALLOWED_KEYS = new Set(['trackerId', 'limit', 'cursor', 'since', 'order']);
-const TIMELINE_ALLOWED_KEYS = new Set(['outputPath', 'includeUnscheduled', 'maxItems', 'from', 'to']);
+const TIMELINE_ALLOWED_KEYS = new Set(['outputPath', 'includeUnscheduled', 'maxItems', 'from', 'to', 'launch']);
 const REPORT_ALLOWED_KEYS = new Set(['outputPath', 'milestoneId', 'asOf', 'lookaheadDays', 'maxItems']);
+const QUERY_ALLOWED_KEYS = new Set(['where', 'savedQuery', 'sort', 'limit', 'cursor', 'includeArchived', 'includeRelationshipRecords', 'includeTotalCount']);
+const TRAVERSE_ALLOWED_KEYS = new Set(['roots', 'membership', 'expand', 'nodeWhere', 'limits', 'failOn', 'savedQuery']);
 const MAX_EXISTING_TIMELINE_BYTES = 1024 * 1024;
 
 const PAGINATION_PROPERTIES = {
@@ -68,6 +72,10 @@ const TIMELINE_PROPERTIES = {
   to: {
     type: 'string',
     description: 'Optional ISO-8601 range end.',
+  },
+  launch: {
+    type: 'string',
+    description: 'Optional launchKey or launch issue key for a rooted launch snapshot.',
   },
 };
 
@@ -134,6 +142,43 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
           description: 'Maximum tracker items to scan. Defaults to 500 and is capped at 500.',
           default: 500,
         },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: TOOL_QUERY,
+    description: 'Run a bounded, cursor-paged predicate or saved query over current-workspace native tracker items. Relationship records are excluded unless explicitly requested. This tool never writes tracker data.',
+    scope: 'global',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        where: { type: 'object', description: 'Validated all/any/not/field predicate clause tree.' },
+        savedQuery: { type: 'object', description: 'Versioned registry query id and parameter object.' },
+        sort: { type: 'array', items: { type: 'object' } },
+        limit: { type: 'number', default: 50, minimum: 1, maximum: 200 },
+        cursor: { type: 'string' },
+        includeArchived: { type: 'boolean', default: false },
+        includeRelationshipRecords: { type: 'boolean', default: false },
+        includeTotalCount: { type: 'boolean', default: true },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: TOOL_TRAVERSE,
+    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved launch query, returning members, edges, boundary nodes, validation, rollups, and provenance. This tool never writes tracker data.',
+    scope: 'global',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        roots: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 },
+        membership: { type: 'object' },
+        expand: { type: 'object' },
+        nodeWhere: { type: 'object' },
+        limits: { type: 'object' },
+        failOn: { type: 'object' },
+        savedQuery: { type: 'object' },
       },
       additionalProperties: false,
     },
@@ -212,6 +257,9 @@ function validatedTimelineParams(
       throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: `${field} must be an ISO-8601 string.` });
     }
   }
+  if (params.launch !== undefined && (typeof params.launch !== 'string' || !params.launch.trim() || params.launch.trim().length > 100)) {
+    throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'launch must be a non-empty string of at most 100 characters.' });
+  }
   return {
     workspacePath,
     includeUnscheduled,
@@ -219,6 +267,7 @@ function validatedTimelineParams(
     outputPath: validatedOutputName(params.outputPath, 'Tracker Timeline.ntimeline', '.ntimeline'),
     ...(params.from ? { from: params.from } : {}),
     ...(params.to ? { to: params.to } : {}),
+    ...(typeof params.launch === 'string' ? { launch: params.launch.trim() } : {}),
   };
 }
 
@@ -250,6 +299,45 @@ function validatedReportParams(
     ...(typeof params.milestoneId === 'string' ? { milestoneId: params.milestoneId.trim() } : {}),
     ...(typeof params.asOf === 'string' ? { asOf: params.asOf.trim() } : {}),
   };
+}
+
+function validatedGraphParams(
+  raw: Record<string, unknown> | undefined,
+  workspacePath: string,
+  kind: 'query' | 'traverse',
+): Record<string, unknown> {
+  const params = raw ?? {};
+  rejectUnknown(params, kind === 'query' ? QUERY_ALLOWED_KEYS : TRAVERSE_ALLOWED_KEYS);
+  ensureWorkspace(workspacePath);
+  const hasSaved = params.savedQuery !== undefined;
+  const hasDirect = kind === 'query' ? params.where !== undefined : params.roots !== undefined;
+  if (hasSaved === hasDirect) {
+    throw new NativeTrackerError({
+      code: 'INVALID_PARAMS',
+      message: kind === 'query'
+        ? 'Exactly one of where or savedQuery is required.'
+        : 'Exactly one of roots or savedQuery is required.',
+    });
+  }
+  if (hasSaved && (!params.savedQuery || typeof params.savedQuery !== 'object' || Array.isArray(params.savedQuery))) {
+    throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'savedQuery must be an object.' });
+  }
+  if (kind === 'query') {
+    if (hasDirect && (!params.where || typeof params.where !== 'object' || Array.isArray(params.where))) {
+      throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'where must be a clause object.' });
+    }
+    if (params.limit !== undefined && (typeof params.limit !== 'number' || !Number.isInteger(params.limit) || params.limit < 1 || params.limit > 200)) {
+      throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'limit must be an integer from 1 through 200.' });
+    }
+    for (const flag of ['includeArchived', 'includeRelationshipRecords', 'includeTotalCount'] as const) {
+      if (params[flag] !== undefined && typeof params[flag] !== 'boolean') {
+        throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: `${flag} must be a boolean.` });
+      }
+    }
+  } else if (hasDirect && (!Array.isArray(params.roots) || params.roots.length < 1 || params.roots.length > 8 || params.roots.some((value) => typeof value !== 'string' || !value.trim()))) {
+    throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'roots must contain 1 through 8 non-empty strings.' });
+  }
+  return { ...params, workspacePath };
 }
 
 function validatedOutputName(raw: unknown, fallback: string, extension: string): string {
@@ -362,6 +450,14 @@ export async function activate(context: BackendContext): Promise<{
     }
   };
 
+  const callGraph = async (method: 'query_items' | 'traverse_graph', raw?: Record<string, unknown>) => {
+    try {
+      return await callReader(method, validatedGraphParams(raw, workspacePath, method === 'query_items' ? 'query' : 'traverse'));
+    } catch (error) {
+      return safeErrorResult(error);
+    }
+  };
+
   const syncTimeline = async (raw?: Record<string, unknown>): Promise<unknown> => {
     try {
       const params = validatedTimelineParams(raw, workspacePath);
@@ -379,6 +475,7 @@ export async function activate(context: BackendContext): Promise<{
           includeUnscheduled: params.includeUnscheduled,
           ...(params.from ? { from: params.from } : {}),
           ...(params.to ? { to: params.to } : {}),
+          ...(params.launch ? { launch: params.launch } : {}),
         },
         snapshot,
       };
@@ -429,6 +526,8 @@ export async function activate(context: BackendContext): Promise<{
       [TOOL_GET_WITH_COMMENTS]: async (params) => await callComments('get_with_comments', params),
       [TOOL_SYNC_TIMELINE]: syncTimeline,
       [TOOL_MILESTONE_REPORT]: generateReport,
+      [TOOL_QUERY]: async (params) => await callGraph('query_items', params),
+      [TOOL_TRAVERSE]: async (params) => await callGraph('traverse_graph', params),
     },
     deactivate: async () => {
       await bridge.stop();

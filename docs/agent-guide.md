@@ -9,9 +9,10 @@ failure handling.
 
 Tracker+ has three distinct surfaces:
 
-1. The four `native_tracker_*` tools read the current workspace's native
-   tracker database. The comment tools return bounded context; the generation
-   tools write a workspace-relative `.ntimeline` or `.md` artifact.
+1. Six `native_tracker_*` tools read the current workspace's native tracker
+   database. Comment, predicate-query, and traversal tools return bounded
+   context; generation tools write a workspace-relative `.ntimeline` or `.md`
+   artifact.
 2. Nimbalyst's built-in `tracker_create`, `tracker_update`,
    `tracker_add_comment`, and related tools own durable tracker mutations.
 3. A `.ntimeline` file is a replaceable projection. Its view preferences are
@@ -48,6 +49,9 @@ considering a restart; a restart is not part of normal recovery.
 6. Inspect Timeline, Graph, Reports, validation findings, and the provenance
    watermark.
 7. Generate a milestone report when a durable status artifact is required.
+
+For launch work, begin with the fail-closed `launch-scope` saved traversal,
+then use a role query for the operator's nonterminal work and attention tags.
 
 ## `native_tracker_get_with_comments`
 
@@ -90,6 +94,62 @@ Use this when only comment history is needed or to continue pagination.
 The argument rules match `native_tracker_get_with_comments`. Stop when
 `page.hasMore` is false. Never construct or modify a cursor.
 
+## `native_tracker_query`
+
+Use this for cursor-paged item predicates or a versioned saved query. Exactly
+one of `where` and `savedQuery` is required.
+
+```json
+{
+  "savedQuery": {
+    "id": "role-active-work-and-attention",
+    "params": { "roleId": "project-manager" }
+  }
+}
+```
+
+Direct predicates use `all`, `any`, `not`, or a field clause:
+
+```json
+{
+  "where": { "all": [
+    { "field": "type", "op": "in", "value": ["task", "launch"] },
+    { "field": "status", "op": "notIn", "value": "$terminalStatuses" }
+  ] },
+  "sort": [{ "field": "updated", "direction": "desc" }],
+  "limit": 50,
+  "includeTotalCount": true
+}
+```
+
+`limit` defaults to 50 and is capped at 200. `cursor` accepts only the opaque
+`page.nextCursor` from the same query and sort. `includeArchived` and
+`includeRelationshipRecords` default to false. Results place items in `nodes`;
+requested `timeline-link` records appear only in `edges`. Always inspect the
+validation and watermark blocks.
+
+## `native_tracker_traverse`
+
+Use traversal for a rooted launch graph with explicit members and boundary
+context. Saved launch queries are the preferred contract:
+
+```json
+{
+  "savedQuery": {
+    "id": "launch-scope",
+    "params": { "launchKey": "FFP-1" }
+  }
+}
+```
+
+Bundled traversal query IDs are `launch-scope`, `launch-hard-blockers`,
+`launch-open-reviews`, and `launch-unscheduled-executable-work`. A direct call
+accepts `roots` (1–8 issue keys, launch keys, or IDs), optional `membership`
+and `expand` stages, an optional predicate `nodeWhere`, bounded `limits`, and
+`failOn.truncation` / `failOn.validation`. Membership nodes are returned in
+`nodes`; external one-hop context is returned in `boundaryNodes` and excluded
+from rollups. `launch-scope` fails closed on truncation or validation errors.
+
 ## `native_tracker_sync_timeline`
 
 Use this after native tracker, relationship, schedule, risk, or PR-reference
@@ -101,6 +161,7 @@ title, view settings, and state filters.
   "outputPath": "planning/Tracker Timeline.ntimeline",
   "includeUnscheduled": true,
   "maxItems": 500,
+  "launch": "FFP-1",
   "from": "2026-07-01",
   "to": "2026-09-30"
 }
@@ -116,6 +177,9 @@ Arguments:
 - `from` and `to` are optional ISO-8601 schedule bounds. Scheduled items are
   included when their start/target interval overlaps the range; undated items
   remain eligible when `includeUnscheduled` is true.
+- `launch` is an optional launch key. When present, sync builds a rooted
+  membership-plus-context snapshot instead of the global recent-item window.
+  Keep separate `.ntimeline` files for separate launches.
 
 The result reports item, milestone, and relationship counts plus truncation and
 source metadata. If it is truncated, narrow the date range or remove irrelevant
@@ -213,8 +277,9 @@ fields use the internal item ID returned by native tracker tools.
 }
 ```
 
-Supported relationship types are `depends-on`, `contributes-to`, `reviews`,
-`evidences`, `implements`, and `related`.
+Supported relationship types are `part-of-launch`, `governs`,
+`contributes-to`, `reviews`, `evidences`, `depends-on`, `precedes`, `enables`,
+`coordinates-with`, `implements`, and `related`.
 
 Additional controls:
 
@@ -225,6 +290,9 @@ Additional controls:
 - `leadLagDays` accepts -365 through 365.
 - `entryEvidence`, `exitEvidence`, and `evidenceSources` are relationship
   fields containing item-reference objects.
+- `clearingCondition` is a `timeline-link` string field the adapter reads and
+  emits on the normalized edge. A hard-serial dependency with no clearing
+  condition fails closed with `hard-serial-controls-missing`.
 
 Rules agents must preserve:
 
@@ -234,6 +302,9 @@ Rules agents must preserve:
 - Secondary contributions are allowed and do not create another parent.
 - `related` may be symmetric; dependency edges remain directed.
 - Clear or supersede an existing edge instead of creating inverse truth.
+- `part-of-launch` is member → launch, must be active to create membership,
+  requires `scopeRole`, and cannot carry `hardness` or `contributionRole`.
+- `scopeRole` and milestone `contributionRole` are separate semantics.
 
 ## Timeline view filters
 
@@ -246,6 +317,31 @@ For example, selecting `Active`, `On track`, and `At risk` shows active work
 whose schedule is either on track or at risk. Deselecting `Complete` hides
 finished work without changing its native status. Filters are document view
 preferences, survive re-sync, and never mutate tracker items.
+
+The Launch selector adds a document-only `filters.launch` value. It shows the
+launch, active depth-one members, and non-membership context as dashed boundary
+nodes. Clearing it restores the whole snapshot; it never edits tracker data.
+
+## Registry overrides
+
+Tracker+ ships `reader/registry.json`. A workspace may override only
+`terminalStatuses`, `roles`, and `savedQueries` through
+`.nimbalyst/tracker-plus.registry.json`. Roles and saved queries merge by ID;
+terminal statuses replace the default list. `relationshipTypes`, `scopeRoles`,
+`executableTypes`, `caps`, and `version` are locked. Any malformed or locked
+override is ignored whole and produces `registry-override-invalid` until fixed.
+Every response includes registry version, effective hash, and override state.
+
+`reader/registry.json` is the single canonical source for the relationship-type
+and scope-role vocabulary that governs tracker validation, adapter
+normalization, projection, and rendering. An automated contract test keeps it in
+lockstep with the renderer's relationship set and the `timeline-link` schema's
+`scopeRole` options, so registry/schema drift fails the suite rather than
+silently dropping valid rows.
+
+When any native `timeline-link` exists, legacy relationship synthesis remains
+disabled for the whole workspace. This accepted fallback is intentionally
+all-or-nothing; migrate relationships before relying on mixed legacy fields.
 
 ## Reading validation and critical path
 
@@ -279,6 +375,10 @@ Common recoveries:
 - `SCHEMA_INCOMPATIBLE`: stop and update the adapter/tests for the new schema.
 - `OUTPUT_DIRECTORY_NOT_FOUND`: create the intended workspace directory, then
   retry the same relative output path.
+- `QUERY_INVALID`, `FIELD_NOT_QUERYABLE`, or `OPERATOR_INVALID`: correct the
+  path-addressed predicate error; never retry by sending SQL.
+- `RESULT_TRUNCATED` or `VALIDATION_FAILED`: narrow the graph or resolve the
+  returned findings; fail-closed launch views must not be treated as complete.
 - Missing tools: confirm extension enablement and backend consent, then inspect
   extension logs.
 
@@ -300,4 +400,3 @@ Build with the Nimbalyst Extension Dev `extension_build` tool, install with
 `extension_install`, iterate with `extension_reload`, then inspect extension
 status and main/renderer logs. Verify a representative `.ntimeline` file when
 an editor is mounted. Do not restart Nimbalyst unless the user explicitly asks.
-

@@ -5,10 +5,15 @@ export type ScheduleHealth = 'on-track' | 'at-risk' | 'late';
 export type ExecutionConstraint = 'clear' | 'waiting' | 'blocked' | 'paused';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type RelationshipType =
+  | 'part-of-launch'
+  | 'governs'
   | 'depends-on'
   | 'contributes-to'
   | 'reviews'
   | 'evidences'
+  | 'precedes'
+  | 'enables'
+  | 'coordinates-with'
   | 'implements'
   | 'related';
 export type DependencyMode = 'finish-to-start' | 'start-to-start' | 'finish-to-finish' | 'start-to-finish';
@@ -44,6 +49,9 @@ export interface TimelineItem {
   capacityPressure?: string | null;
   gate?: string | null;
   launchScoped: boolean;
+  launchKey?: string | null;
+  launchMember?: boolean;
+  boundary?: boolean;
   primaryMilestoneId?: string | null;
   scheduleSlackDays?: number | null;
   criticalPathSlackDays?: number | null;
@@ -73,6 +81,8 @@ export interface TimelineRelationship {
   clearingCondition?: string | null;
   ownerLabel?: string | null;
   primaryContribution: boolean;
+  contributionRole?: string | null;
+  scopeRole?: string | null;
   entryEvidenceIds: string[];
   exitEvidenceIds: string[];
   evidenceSourceIds: string[];
@@ -137,6 +147,7 @@ export interface TimelineDocument {
     scheduleHealth: ScheduleHealth[];
     from?: string;
     to?: string;
+    launch?: string;
   };
   snapshot: TimelineSnapshot;
 }

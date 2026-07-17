@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,6 +30,9 @@ try:
         SCHEMA_ADAPTER,
         ReaderError,
     )
+    from .query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, sort_sql, validate_sort
+    from .registry import effective_registry
+    from .traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage
 except ImportError:  # pragma: no cover - used when server.py runs as a script
     from contracts import (  # type: ignore[no-redef]
         DEFAULT_LIMIT,
@@ -44,9 +48,9 @@ except ImportError:  # pragma: no cover - used when server.py runs as a script
         SCHEMA_ADAPTER,
         ReaderError,
     )
-
-
-COMPLETE_WORKFLOWS = {"done", "completed", "achieved", "closed", "shipped", "implemented"}
+    from query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, sort_sql, validate_sort  # type: ignore[no-redef]
+    from registry import effective_registry  # type: ignore[no-redef]
+    from traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage  # type: ignore[no-redef]
 
 
 class NativeTrackerReader:
@@ -54,9 +58,19 @@ class NativeTrackerReader:
 
     def __init__(self, database_path: Path | None = None) -> None:
         self._database_path = database_path
+        self._registry, self._registry_override_active, self._registry_override_error, self._registry_hash = effective_registry(Path.cwd())
+
+    def _load_registry(self, workspace_path: str) -> None:
+        (
+            self._registry,
+            self._registry_override_active,
+            self._registry_override_error,
+            self._registry_hash,
+        ) = effective_registry(workspace_path)
 
     def list_comments(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_params(params)
+        self._load_registry(parsed["workspacePath"])
         row, schema_fingerprint = self._find_tracker(
             parsed["workspacePath"], parsed["trackerId"]
         )
@@ -70,6 +84,7 @@ class NativeTrackerReader:
 
     def get_with_comments(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_params(params)
+        self._load_registry(parsed["workspacePath"])
         row, schema_fingerprint = self._find_tracker(
             parsed["workspacePath"], parsed["trackerId"]
         )
@@ -104,6 +119,9 @@ class NativeTrackerReader:
 
     def timeline_snapshot(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_timeline_params(params)
+        self._load_registry(parsed["workspacePath"])
+        if parsed.get("launch"):
+            return self._launch_timeline_snapshot(parsed)
         link_rows: list[tuple[sqlite3.Row, dict[str, Any]]] = []
         try:
             with self._connect() as connection:
@@ -229,10 +247,13 @@ class NativeTrackerReader:
             items, raw_fields_by_id, link_rows
         )
         self._apply_derived_milestone_progress(items, edges)
+        self._apply_launch_rollups(items, edges)
         critical_path, analysis_findings = self._apply_timeline_analysis(items, edges)
         validation = [
+            *self._registry_findings(),
             *relationship_findings,
             *analysis_findings,
+            *self._launch_findings(items, edges),
             *self._validate_timeline(items, edges),
         ]
         item_ids = {item["id"] for item in items}
@@ -245,6 +266,8 @@ class NativeTrackerReader:
             "native timeline-link rows" if link_rows else "legacy tracker fields"
         )
         source["relationshipRows"] = len(link_rows)
+        source["sourceItemCount"] = len(rows)
+        source["sourceRelationshipCount"] = len(link_rows)
         source["endpointItems"] = len(items)
         source["milestoneRows"] = sum(item["primaryType"] == "milestone" for item in items)
         source["legacyRelationships"] = sum(edge.get("legacy") is True for edge in edges)
@@ -264,7 +287,8 @@ class NativeTrackerReader:
         source["milestoneProgressSource"] = "active primary deliverables"
 
         for item in items:
-            item.pop("_launchScopeExplicit", None)
+            for key in [entry for entry in item if entry.startswith("_")]:
+                item.pop(key, None)
 
         result = {
             "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -282,6 +306,423 @@ class NativeTrackerReader:
             "source": source,
         }
         return self._fit_timeline_result(result)
+
+    def _launch_timeline_snapshot(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
+        relationship_types = [
+            value for value in self._registry["relationshipTypes"]
+            if value != "part-of-launch"
+        ]
+        graph = self.traverse_graph({
+            "workspacePath": parsed["workspacePath"],
+            "roots": [parsed["launch"]],
+            "membership": {"relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1},
+            "expand": {"relationshipTypes": relationship_types, "direction": "both", "maxDepth": 1, "edgeWhere": {"status": ["active"]}, "externalEndpointBehavior": "boundary"},
+            "limits": {"maxNodes": parsed["maxItems"], "maxEdges": min(self._registry["caps"]["traverseEdgesMax"], parsed["maxItems"] * 2)},
+            "failOn": {"truncation": False, "validation": False},
+        })
+        nodes = list(graph["nodes"])
+        boundary_nodes = list(graph["boundaryNodes"])
+        root_ids = set(graph["query"].get("resolvedRoots", []))
+        for item in nodes:
+            item["boundary"] = False
+            item["launchMember"] = item["id"] not in root_ids
+        for item in boundary_nodes:
+            item["boundary"] = True
+            item["launchMember"] = False
+        items = nodes + boundary_nodes
+        edges = list(graph["edges"])
+        self._apply_derived_milestone_progress(items, edges)
+        self._apply_launch_rollups(items, edges)
+        critical_path, analysis_findings = self._apply_timeline_analysis(items, edges)
+        validation = [*graph["validation"]["findings"], *analysis_findings, *self._validate_timeline(items, edges)]
+        watermark = graph["watermark"]
+        source = self._source(watermark["schemaFingerprint"])
+        source.update({
+            "projectStateRevision": "unavailable",
+            "relationshipSource": "native timeline-link rows",
+            "relationshipRows": watermark["sourceRelationshipCount"],
+            "sourceItemCount": watermark["sourceItemCount"],
+            "sourceRelationshipCount": watermark["sourceRelationshipCount"],
+            "endpointItems": len(items),
+            "milestoneRows": sum(item.get("primaryType") == "milestone" for item in items),
+            "rootLaunch": parsed["launch"],
+            "membership": {"memberCount": sum(bool(item.get("launchMember")) for item in items), "boundaryCount": len(boundary_nodes)},
+        })
+        result = {
+            "generatedAt": watermark["generatedAt"],
+            "items": items,
+            "milestones": [item for item in items if item.get("primaryType") == "milestone" and not item.get("boundary")],
+            "relationships": edges,
+            "validation": validation,
+            "criticalPath": critical_path,
+            "page": {"maxItems": parsed["maxItems"], "returned": len(items), "queryTruncated": graph["page"]["truncated"], "responseTruncated": False},
+            "source": source,
+        }
+        return self._fit_timeline_result(result)
+
+    def query_items(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Run one bounded, cursor-paged predicate query over tracker items."""
+        started = time.perf_counter()
+        allowed = {
+            "workspacePath", "where", "savedQuery", "sort", "limit", "cursor",
+            "includeArchived", "includeRelationshipRecords", "includeTotalCount",
+        }
+        unknown = sorted(set(params) - allowed)
+        if unknown:
+            raise ReaderError("INVALID_PARAMS", f"Unknown parameter(s): {', '.join(unknown)}.")
+        workspace_path = params.get("workspacePath")
+        if not isinstance(workspace_path, str) or not Path(workspace_path).is_absolute():
+            raise ReaderError("WORKSPACE_UNAVAILABLE", "The query requires an open local workspace.")
+        self._load_registry(workspace_path)
+        has_where = "where" in params
+        has_saved = "savedQuery" in params
+        if has_where == has_saved:
+            raise ReaderError("QUERY_INVALID", "Exactly one of where or savedQuery is required.")
+        expanded: dict[str, Any] = dict(params)
+        query_echo: dict[str, Any] = {}
+        if has_saved:
+            definition, query_echo = expand_saved_query(params["savedQuery"], self._registry, "predicate")
+            expanded = {**definition, **{key: value for key, value in params.items() if key not in {"savedQuery"}}}
+        where = expanded.get("where")
+        compiler = PredicateCompiler(self._registry)
+        compiler.validate(where)
+        where_sql, values = compiler.compile(where)
+        sort = validate_sort(expanded.get("sort"))
+        cursor_id = decode_cursor(expanded.get("cursor"), sort)
+        caps = self._registry["caps"]
+        limit = expanded.get("limit", caps["queryLimitDefault"])
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= caps["queryLimitMax"]:
+            raise ReaderError("QUERY_INVALID", f"limit must be an integer from 1 through {caps['queryLimitMax']}.")
+        include_archived = expanded.get("includeArchived", False)
+        include_links = expanded.get("includeRelationshipRecords", False)
+        include_total = expanded.get("includeTotalCount", True)
+        if not all(isinstance(value, bool) for value in (include_archived, include_links, include_total)):
+            raise ReaderError("QUERY_INVALID", "Query include flags must be booleans.")
+        implicit = ["workspace=current", "deleted_at IS NULL"]
+        sql_parts = ["workspace = ?", "deleted_at IS NULL", where_sql]
+        bindings: list[Any] = [workspace_path, *values]
+        if not include_archived:
+            sql_parts.append("archived = 0")
+            implicit.append("archived = false")
+        if not include_links:
+            sql_parts.append("type <> 'timeline-link'")
+            implicit.append("type != timeline-link")
+        predicate_sql = " AND ".join(f"({part})" for part in sql_parts)
+        try:
+            with self._connect() as connection:
+                fingerprint = self._validate_schema(connection)
+                source_counts = connection.execute(
+                    "SELECT COUNT(*), SUM(CASE WHEN type='timeline-link' THEN 1 ELSE 0 END) FROM tracker_items WHERE workspace=? AND deleted_at IS NULL",
+                    (workspace_path,),
+                ).fetchone()
+                rows = connection.execute(
+                    f"SELECT id, issue_key, type, data, content, archived, type_tags, created, updated FROM tracker_items WHERE {predicate_sql} ORDER BY {sort_sql(sort)}",
+                    bindings,
+                ).fetchall()
+                total_count = len(rows) if include_total else None
+                validation_rows = connection.execute(
+                    """SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
+                       FROM tracker_items
+                       WHERE workspace=? AND deleted_at IS NULL
+                         AND (type <> 'timeline-link' OR json_extract(data,'$.relationshipType')='part-of-launch')
+                       ORDER BY id ASC""",
+                    (workspace_path,),
+                ).fetchall()
+        except ReaderError:
+            raise
+        except sqlite3.OperationalError:
+            raise ReaderError("DATABASE_READ_FAILED", "The Nimbalyst tracker database could not be queried safely.") from None
+        start_index = 0
+        if cursor_id is not None:
+            matching = [index for index, row in enumerate(rows) if str(row["id"]) == cursor_id]
+            if len(matching) != 1:
+                raise ReaderError("CURSOR_INVALID", "The query cursor no longer identifies a result row.")
+            start_index = matching[0] + 1
+        page_rows = list(rows[start_index:start_index + limit + 1])
+        has_more = len(page_rows) > limit
+        page_rows = page_rows[:limit]
+        nodes: list[dict[str, Any]] = []
+        link_rows: list[tuple[sqlite3.Row, dict[str, Any]]] = []
+        raw_fields: dict[str, dict[str, Any]] = {}
+        for row in page_rows:
+            fields = self._flatten_custom_fields(self._parse_data(row))
+            if row["type"] == "timeline-link":
+                link_rows.append((row, fields))
+                continue
+            item = self._timeline_item(row, fields)
+            item["type"] = item["primaryType"]
+            nodes.append(item)
+            raw_fields[item["id"]] = fields
+        edges, edge_findings = self._normalized_relationships(nodes, raw_fields, link_rows)
+        validation_items: list[dict[str, Any]] = []
+        validation_fields: dict[str, dict[str, Any]] = {}
+        validation_links: list[tuple[sqlite3.Row, dict[str, Any]]] = []
+        for row in validation_rows:
+            fields = self._flatten_custom_fields(self._parse_data(row))
+            if row["type"] == "timeline-link":
+                validation_links.append((row, fields))
+            elif not row["archived"]:
+                item = self._timeline_item(row, fields)
+                validation_items.append(item)
+                validation_fields[item["id"]] = fields
+        validation_edges, validation_edge_findings = self._normalized_relationships(validation_items, validation_fields, validation_links)
+        rollup_source_ids = sorted({
+            edge["sourceId"] for edge in validation_edges
+            if edge.get("relationshipType") == "part-of-launch" and edge.get("state") == "active" and edge.get("scopeRole") in {"core", "acceptance"}
+        } | {item["id"] for item in validation_items if item.get("primaryType") == "launch"})
+        if rollup_source_ids:
+            placeholders = ",".join("?" for _ in rollup_source_ids)
+            with self._connect() as connection:
+                dependency_rows = connection.execute(
+                    f"""SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
+                        FROM tracker_items WHERE workspace=? AND deleted_at IS NULL AND type='timeline-link'
+                          AND json_extract(data,'$.relationshipType')='depends-on'
+                          AND json_extract(data,'$.sourceItem.itemId') IN ({placeholders})
+                        ORDER BY id ASC""",
+                    (workspace_path, *rollup_source_ids),
+                ).fetchall()
+            if dependency_rows:
+                validation_links.extend((row, self._flatten_custom_fields(self._parse_data(row))) for row in dependency_rows)
+                validation_edges, validation_edge_findings = self._normalized_relationships(validation_items, validation_fields, validation_links)
+        self._apply_launch_rollups(validation_items, validation_edges)
+        rollups = {item["id"]: item.get("launchRollup") for item in validation_items if item.get("launchRollup")}
+        for node in nodes:
+            if node["id"] in rollups:
+                node["launchRollup"] = rollups[node["id"]]
+                node["progress"] = rollups[node["id"]]["derivedProgress"]
+        findings = [*self._registry_findings(), *edge_findings, *validation_edge_findings, *self._launch_findings(validation_items, validation_edges)]
+        result = {
+            "nodes": nodes,
+            "edges": sorted(edges, key=lambda edge: edge["id"]),
+            "boundaryNodes": [],
+            "page": {
+                "totalCount": total_count,
+                "returnedCount": len(page_rows),
+                "nextCursor": encode_cursor(sort, str(page_rows[-1]["id"])) if has_more and page_rows else None,
+                "truncated": False,
+            },
+            "validation": self._validation_block(findings),
+            "watermark": self._watermark(
+                fingerprint,
+                int(source_counts[0] or 0),
+                int(source_counts[1] or 0),
+                started,
+            ),
+            "query": {
+                **query_echo,
+                "where": where,
+                "sort": sort,
+                "implicit": implicit,
+                "includeArchived": include_archived,
+                "includeRelationshipRecords": include_links,
+            },
+        }
+        return self._fit_graph_result(result, sort)
+
+    def traverse_graph(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Traverse normalized relationships from one or more bounded roots."""
+        started = time.perf_counter()
+        allowed = {"workspacePath", "roots", "membership", "expand", "nodeWhere", "limits", "failOn", "savedQuery"}
+        unknown = sorted(set(params) - allowed)
+        if unknown:
+            raise ReaderError("INVALID_PARAMS", f"Unknown parameter(s): {', '.join(unknown)}.")
+        workspace_path = params.get("workspacePath")
+        if not isinstance(workspace_path, str) or not Path(workspace_path).is_absolute():
+            raise ReaderError("WORKSPACE_UNAVAILABLE", "Traversal requires an open local workspace.")
+        self._load_registry(workspace_path)
+        expanded: dict[str, Any] = dict(params)
+        query_echo: dict[str, Any] = {}
+        if "savedQuery" in params:
+            if "roots" in params:
+                raise ReaderError("QUERY_INVALID", "savedQuery and roots cannot be combined.")
+            definition, query_echo = expand_saved_query(params["savedQuery"], self._registry, "traversal")
+            expanded = {**definition, "workspacePath": workspace_path}
+        roots = expanded.get("roots")
+        caps = self._registry["caps"]
+        if not isinstance(roots, list) or not 1 <= len(roots) <= caps["traverseRootsMax"] or not all(isinstance(value, str) and value.strip() for value in roots):
+            raise ReaderError("QUERY_TOO_COMPLEX", f"roots must contain 1 through {caps['traverseRootsMax']} non-empty identifiers.")
+        node_where = expanded.get("nodeWhere")
+        if node_where is not None:
+            predicate_compiler = PredicateCompiler(self._registry)
+            predicate_compiler.validate(node_where, "nodeWhere")
+        limits = expanded.get("limits", {})
+        if not isinstance(limits, Mapping) or set(limits) - {"maxNodes", "maxEdges"}:
+            raise ReaderError("QUERY_INVALID", "limits is invalid.")
+        max_nodes = limits.get("maxNodes", caps["traverseNodesMax"])
+        max_edges = limits.get("maxEdges", caps["traverseEdgesMax"])
+        if isinstance(max_nodes, bool) or not isinstance(max_nodes, int) or not 1 <= max_nodes <= caps["traverseNodesMax"]:
+            raise ReaderError("QUERY_TOO_COMPLEX", f"maxNodes must be at most {caps['traverseNodesMax']}.")
+        if isinstance(max_edges, bool) or not isinstance(max_edges, int) or not 1 <= max_edges <= caps["traverseEdgesMax"]:
+            raise ReaderError("QUERY_TOO_COMPLEX", f"maxEdges must be at most {caps['traverseEdgesMax']}.")
+        fail_on = expanded.get("failOn", {})
+        if not isinstance(fail_on, Mapping) or set(fail_on) - {"truncation", "validation"} or not all(isinstance(value, bool) for value in fail_on.values()):
+            raise ReaderError("QUERY_INVALID", "failOn is invalid.")
+        try:
+            with self._connect() as connection:
+                fingerprint = self._validate_schema(connection)
+                rows = connection.execute(
+                    "SELECT id, issue_key, type, data, content, archived, type_tags, created, updated FROM tracker_items WHERE workspace=? AND deleted_at IS NULL ORDER BY id ASC",
+                    (workspace_path,),
+                ).fetchall()
+        except ReaderError:
+            raise
+        except sqlite3.OperationalError:
+            raise ReaderError("DATABASE_READ_FAILED", "The Nimbalyst tracker database could not be traversed safely.") from None
+        item_rows = [row for row in rows if row["type"] != "timeline-link"]
+        link_db_rows = [row for row in rows if row["type"] == "timeline-link"]
+        all_items: list[dict[str, Any]] = []
+        fields_by_id: dict[str, dict[str, Any]] = {}
+        row_by_id: dict[str, dict[str, Any]] = {}
+        for row in item_rows:
+            fields = self._flatten_custom_fields(self._parse_data(row))
+            item = self._timeline_item(row, fields)
+            item["type"] = item["primaryType"]
+            item["archived"] = bool(row["archived"])
+            all_items.append(item)
+            fields_by_id[item["id"]] = fields
+            row_by_id[item["id"]] = {key: row[key] for key in row.keys()}
+        items_by_id = {item["id"]: item for item in all_items}
+        link_rows = [(row, self._flatten_custom_fields(self._parse_data(row))) for row in link_db_rows]
+        edges, normalization_findings = self._normalized_relationships(all_items, fields_by_id, link_rows)
+        edges_by_source: dict[str, list[dict[str, Any]]] = {}
+        edges_by_target: dict[str, list[dict[str, Any]]] = {}
+        for edge in edges:
+            edges_by_source.setdefault(edge["sourceId"], []).append(edge)
+            edges_by_target.setdefault(edge["targetId"], []).append(edge)
+        for values in [*edges_by_source.values(), *edges_by_target.values()]:
+            values.sort(key=lambda value: value["id"])
+
+        def incident(node_id: str, direction: str) -> list[dict[str, Any]]:
+            values: dict[str, dict[str, Any]] = {}
+            if direction in {"outgoing", "both"}:
+                values.update((edge["id"], edge) for edge in edges_by_source.get(node_id, []))
+            if direction in {"incoming", "both"}:
+                values.update((edge["id"], edge) for edge in edges_by_target.get(node_id, []))
+            return [values[key] for key in sorted(values)]
+
+        resolved_roots: list[str] = []
+        allow_archived_root = archived_explicitly_allowed(node_where)
+        for raw_root in roots:
+            matches = [item for item in all_items if raw_root in {item["id"], item.get("issueKey"), item.get("launchKey")}]
+            if not allow_archived_root:
+                matches = [item for item in matches if not item.get("archived")]
+            if not matches:
+                raise ReaderError("ROOT_NOT_FOUND", "A traversal root was not found in the current workspace.", {"root": raw_root})
+            if len(matches) > 1:
+                raise ReaderError("ROOT_AMBIGUOUS", "A traversal root matched more than one item.", {"root": raw_root})
+            resolved_roots.append(matches[0]["id"])
+        resolved_roots = sorted(set(resolved_roots))
+        default_membership = any(items_by_id[root].get("primaryType") == "launch" for root in resolved_roots)
+        membership_raw = expanded.get("membership")
+        if membership_raw is None and default_membership:
+            membership_raw = {"relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1}
+        membership = validate_stage(membership_raw, "membership", self._registry, membership=True)
+        expand = validate_stage(expanded.get("expand"), "expand", self._registry, membership=False)
+
+        member_ids: set[str] = set()
+        selected_edge_ids: set[str] = set()
+        node_depth: dict[str, int] = {root: 0 for root in resolved_roots}
+        frontier = list(resolved_roots)
+        if membership:
+            for depth in range(1, membership["maxDepth"] + 1):
+                next_frontier: set[str] = set()
+                for node_id in sorted(frontier):
+                    for edge in incident(node_id, membership["direction"]):
+                        if not edge_matches(edge, membership, membership=True):
+                            continue
+                        next_id = neighbor(edge, node_id, membership["direction"])
+                        if next_id:
+                            selected_edge_ids.add(edge["id"])
+                        if next_id and next_id in items_by_id and next_id not in resolved_roots and next_id not in member_ids:
+                            next_frontier.add(next_id)
+                            node_depth.setdefault(next_id, depth)
+                member_ids.update(next_frontier)
+                frontier = sorted(next_frontier)
+                if not frontier:
+                    break
+
+        boundary_ids: set[str] = set()
+        if expand:
+            context_seen = set(resolved_roots) | member_ids
+            frontier = sorted(context_seen)
+            for depth in range(1, expand["maxDepth"] + 1):
+                next_frontier: set[str] = set()
+                for node_id in frontier:
+                    for edge in incident(node_id, expand["direction"]):
+                        if not edge_matches(edge, expand, membership=False):
+                            continue
+                        next_id = neighbor(edge, node_id, expand["direction"])
+                        if not next_id:
+                            continue
+                        selected_edge_ids.add(edge["id"])
+                        if next_id in items_by_id:
+                            if next_id not in context_seen:
+                                next_frontier.add(next_id)
+                                node_depth.setdefault(next_id, depth + 10)
+                context_seen.update(next_frontier)
+                boundary_ids.update(next_frontier - member_ids - set(resolved_roots))
+                frontier = sorted(next_frontier)
+                if not frontier:
+                    break
+            if expand["externalEndpointBehavior"] == "exclude":
+                boundary_ids.clear()
+
+        kept_member_ids = set(member_ids)
+        if node_where is not None:
+            kept_member_ids = {
+                item_id for item_id in member_ids
+                if predicate_matches(row_by_id[item_id], fields_by_id[item_id], node_where, self._registry)
+            }
+        kept_ids = set(resolved_roots) | kept_member_ids | boundary_ids
+        candidate_edges = [edge for edge in edges if edge["id"] in selected_edge_ids]
+        findings = [*self._registry_findings(), *normalization_findings]
+        tolerated_archived_ids: set[str] = set()
+        for edge in candidate_edges:
+            for endpoint in (edge["sourceId"], edge["targetId"]):
+                item = items_by_id.get(endpoint)
+                tolerated = item and item.get("archived") and edge.get("relationshipType") == "evidences" and edge.get("state") == "active" and edge.get("effectiveRevision")
+                if tolerated:
+                    tolerated_archived_ids.add(endpoint)
+                if item is None or (item.get("archived") and not tolerated):
+                    findings.append(self._finding("orphan-endpoint", "error", f"Relationship {edge.get('issueKey') or edge['id']} has an unavailable endpoint.", item_ids=[endpoint], relationship_ids=[edge["id"]]))
+        kept_ids = {item_id for item_id in kept_ids if not items_by_id[item_id].get("archived") or item_id in tolerated_archived_ids}
+        selected_edges = [edge for edge in candidate_edges if edge["sourceId"] in kept_ids and edge["targetId"] in kept_ids]
+        result_items = [items_by_id[item_id] for item_id in sorted(kept_ids)]
+        findings.extend(self._launch_findings(result_items, selected_edges))
+        self._apply_launch_rollups(result_items, selected_edges)
+        validation = self._validation_block(findings)
+
+        ordered_levels: dict[int, list[str]] = {}
+        for item_id in kept_ids:
+            ordered_levels.setdefault(node_depth.get(item_id, 99), []).append(item_id)
+        retained_ids: set[str] = set()
+        truncated = False
+        for depth in sorted(ordered_levels):
+            level = sorted(ordered_levels[depth])
+            if len(retained_ids) + len(level) > max_nodes:
+                truncated = True
+                break
+            retained_ids.update(level)
+        selected_edges = [edge for edge in selected_edges if edge["sourceId"] in retained_ids and edge["targetId"] in retained_ids]
+        if len(selected_edges) > max_edges:
+            selected_edges = sorted(selected_edges, key=lambda edge: edge["id"])[:max_edges]
+            truncated = True
+        if truncated and fail_on.get("truncation", False):
+            raise ReaderError("RESULT_TRUNCATED", "Traversal caps prevented a complete graph response.")
+        if validation["state"] == "fail" and fail_on.get("validation", False):
+            raise ReaderError("VALIDATION_FAILED", "Traversal validation failed.", {"validation": validation})
+        nodes = [items_by_id[item_id] for item_id in sorted(retained_ids - boundary_ids)]
+        boundary_nodes = [items_by_id[item_id] for item_id in sorted(retained_ids & boundary_ids)]
+        result = {
+            "nodes": nodes,
+            "edges": sorted(selected_edges, key=lambda edge: edge["id"]),
+            "boundaryNodes": boundary_nodes,
+            "page": {"totalCount": len(kept_ids), "returnedCount": len(nodes) + len(boundary_nodes), "nextCursor": None, "truncated": truncated},
+            "validation": validation,
+            "watermark": self._watermark(fingerprint, len(item_rows), len(link_db_rows), started),
+            "query": {**query_echo, "roots": roots, "resolvedRoots": resolved_roots, "membership": membership, "expand": expand, "nodeWhere": node_where},
+        }
+        return self._fit_graph_result(result)
 
     def milestone_report(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_report_params(params)
@@ -451,7 +892,7 @@ class NativeTrackerReader:
         }
 
     def _validated_timeline_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        allowed = {"workspacePath", "includeUnscheduled", "maxItems", "from", "to"}
+        allowed = {"workspacePath", "includeUnscheduled", "maxItems", "from", "to", "launch"}
         unknown = sorted(set(params) - allowed)
         if unknown:
             raise ReaderError("INVALID_PARAMS", f"Unknown parameter(s): {', '.join(unknown)}.")
@@ -470,12 +911,16 @@ class NativeTrackerReader:
         to_ms = self._optional_date_ms(to_value, "to")
         if from_ms is not None and to_ms is not None and from_ms > to_ms:
             raise ReaderError("INVALID_PARAMS", "from must be on or before to.")
+        launch = params.get("launch")
+        if launch is not None and (not isinstance(launch, str) or not launch.strip() or len(launch.strip()) > 100):
+            raise ReaderError("INVALID_PARAMS", "launch must be a non-empty key of at most 100 characters.")
         return {
             "workspacePath": workspace_path,
             "includeUnscheduled": include_unscheduled,
             "maxItems": max_items,
             "fromMs": from_ms,
             "toMs": to_ms,
+            "launch": launch.strip() if isinstance(launch, str) else None,
         }
 
     def _validated_report_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
@@ -600,7 +1045,7 @@ class NativeTrackerReader:
         if not appdata:
             raise ReaderError(
                 "PLATFORM_UNSUPPORTED",
-                "Version 0.3.0 supports Windows installations with APPDATA available.",
+                "Version 0.4.0 supports Windows installations with APPDATA available.",
             )
         root = Path(appdata) / "@nimbalyst" / "electron"
         config_path = root / "database-backend.json"
@@ -738,29 +1183,27 @@ class NativeTrackerReader:
                 url = url or f"https://github.com/{match.group(1)}/{match.group(2)}/pull/{match.group(3)}"
         return number, url
 
-    @staticmethod
-    def _is_complete(item: Mapping[str, Any]) -> bool:
-        return str(item.get("workflow", "")).lower() in COMPLETE_WORKFLOWS
+    def _is_complete(self, item: Mapping[str, Any]) -> bool:
+        return str(item.get("workflow", "")).lower() in {
+            str(value).lower() for value in self._registry["terminalStatuses"]
+        }
 
-    @classmethod
-    def _effective_deliverable_progress(cls, item: Mapping[str, Any]) -> float:
-        if cls._is_complete(item):
+    def _effective_deliverable_progress(self, item: Mapping[str, Any]) -> float:
+        if self._is_complete(item):
             return 100.0
         progress = item.get("progress")
         if isinstance(progress, bool) or not isinstance(progress, (int, float)):
             return 0.0
         return max(0.0, min(100.0, float(progress)))
 
-    @classmethod
-    def _derived_milestone_progress(cls, deliverables: list[Mapping[str, Any]]) -> int:
+    def _derived_milestone_progress(self, deliverables: list[Mapping[str, Any]]) -> int:
         if not deliverables:
             return 0
-        average = sum(cls._effective_deliverable_progress(item) for item in deliverables) / len(deliverables)
+        average = sum(self._effective_deliverable_progress(item) for item in deliverables) / len(deliverables)
         return int(average + 0.5)
 
-    @classmethod
     def _apply_derived_milestone_progress(
-        cls,
+        self,
         items: list[dict[str, Any]],
         edges: list[dict[str, Any]],
     ) -> None:
@@ -783,7 +1226,7 @@ class NativeTrackerReader:
             if source is not None:
                 deliverables_by_milestone[str(edge["targetId"])][source["id"]] = source
         for milestone_id in milestone_ids:
-            items_by_id[milestone_id]["progress"] = cls._derived_milestone_progress(
+            items_by_id[milestone_id]["progress"] = self._derived_milestone_progress(
                 list(deliverables_by_milestone[milestone_id].values())
             )
 
@@ -830,12 +1273,14 @@ class NativeTrackerReader:
             "typeTags": type_tags,
             "title": title,
             "workflow": workflow,
+            "status": workflow,
             "priority": self._bounded_string(fields.get("priority"), 100),
             "ownerLabel": owner_label,
             "startDate": start_date,
             "dueDate": due_date,
             "forecastDate": self._date_string(fields.get("forecastDate")),
             "progress": progress,
+            "_storedProgress": progress_raw is not None,
             "scheduleHealth": schedule_health if schedule_health in {"on-track", "at-risk", "late"} else "on-track",
             "scheduleHealthReasons": [],
             "executionConstraint": execution_constraint if execution_constraint in {"clear", "waiting", "blocked", "paused"} else "clear",
@@ -850,6 +1295,14 @@ class NativeTrackerReader:
             "technicalUncertainty": self._bounded_string(fields.get("technicalUncertainty"), 40),
             "capacityPressure": self._bounded_string(fields.get("capacityPressure"), 40),
             "gate": self._bounded_string(fields.get("gate"), 200),
+            "launchKey": self._bounded_string(fields.get("launchKey"), 100),
+            "tags": [self._bounded_string(value, 100) for value in fields.get("tags", []) if self._bounded_string(value, 100)] if isinstance(fields.get("tags"), list) else [],
+            "actualDate": self._date_string(fields.get("actualDate")),
+            "_launchOwnerPresent": owner_label is not None,
+            "_launchAudienceCount": len(fields.get("audience", [])) if isinstance(fields.get("audience"), list) else 0,
+            "_launchScopeRevisionPresent": self._bounded_string(fields.get("scopeRevision"), 200) is not None,
+            "_launchEntryCriteriaCount": len(fields.get("entryCriteria", [])) if isinstance(fields.get("entryCriteria"), list) else 0,
+            "_launchExitCriteriaCount": len(fields.get("exitCriteria", [])) if isinstance(fields.get("exitCriteria"), list) else 0,
             "launchScoped": launch_scope == "launch",
             "_launchScopeExplicit": launch_scope == "launch",
             "primaryMilestoneId": None,
@@ -872,6 +1325,7 @@ class NativeTrackerReader:
         edges: list[dict[str, Any]] = []
         findings: list[dict[str, Any]] = []
         explicit_keys: set[tuple[str, str, str]] = set()
+        membership_roles: dict[tuple[str, str], str | None] = {}
 
         for row, fields in link_rows:
             sources = self._relationship_targets(fields.get("sourceItem"))
@@ -890,9 +1344,7 @@ class NativeTrackerReader:
             source = sources[0]
             target = targets[0]
             relationship_type = self._bounded_string(fields.get("relationshipType"), 60)
-            if relationship_type not in {
-                "depends-on", "contributes-to", "reviews", "evidences", "implements", "related"
-            }:
+            if relationship_type not in self._registry["relationshipTypes"]:
                 findings.append(
                     self._finding(
                         "invalid-relationship-type",
@@ -906,6 +1358,14 @@ class NativeTrackerReader:
             target_id = target["itemId"]
             key = (source_id, relationship_type, target_id)
             if key in explicit_keys:
+                if relationship_type == "part-of-launch" and (self._bounded_string(fields.get("status"), 40) or "active") == "active":
+                    duplicate_code = "conflicting-scope-roles" if membership_roles.get((source_id, target_id)) != self._bounded_string(fields.get("scopeRole"), 60) else "duplicate-active-membership"
+                    findings.append(self._finding(
+                        duplicate_code, "error",
+                        f"Launch membership {source_id} → {target_id} is duplicated or conflicts in scope role.",
+                        item_ids=[source_id, target_id], relationship_ids=[link_id],
+                    ))
+                    continue
                 findings.append(
                     self._finding(
                         "duplicate-relationship",
@@ -916,6 +1376,8 @@ class NativeTrackerReader:
                 )
                 continue
             explicit_keys.add(key)
+            if relationship_type == "part-of-launch":
+                membership_roles[(source_id, target_id)] = self._bounded_string(fields.get("scopeRole"), 60)
             status = self._bounded_string(fields.get("status"), 40)
             directedness = self._bounded_string(fields.get("directedness"), 40)
             entry_evidence = self._relationship_targets(fields.get("entryEvidence"))
@@ -942,6 +1404,8 @@ class NativeTrackerReader:
                 "clearingCondition": self._bounded_string(fields.get("clearingCondition"), 2_000),
                 "ownerLabel": self._identity_label(fields.get("owner")),
                 "primaryContribution": fields.get("contributionRole") == "primary",
+                "contributionRole": self._bounded_string(fields.get("contributionRole"), 60),
+                "scopeRole": self._bounded_string(fields.get("scopeRole"), 60),
                 "entryEvidenceIds": [entry["itemId"] for entry in entry_evidence],
                 "exitEvidenceIds": [entry["itemId"] for entry in exit_evidence],
                 "evidenceSourceIds": [entry["itemId"] for entry in evidence_sources],
@@ -951,6 +1415,19 @@ class NativeTrackerReader:
                 "targetInSnapshot": target_id in items_by_id,
                 "legacy": False,
             }
+            if relationship_type == "part-of-launch":
+                if edge["scopeRole"] not in self._registry["scopeRoles"]:
+                    findings.append(self._finding(
+                        "scope-role-invalid", "error",
+                        f"Launch membership {row['issue_key'] or link_id} requires a registered scopeRole.",
+                        item_ids=[source_id, target_id], relationship_ids=[link_id],
+                    ))
+                if edge["contributionRole"] is not None or self._bounded_string(fields.get("hardness"), 40) is not None:
+                    findings.append(self._finding(
+                        "scope-role-conflict", "error",
+                        f"Launch membership {row['issue_key'] or link_id} cannot carry contributionRole or hardness.",
+                        item_ids=[source_id, target_id], relationship_ids=[link_id],
+                    ))
             if not edge["sourceTitle"] and source_id in items_by_id:
                 edge["sourceTitle"] = items_by_id[source_id]["title"]
                 edge["sourceIssueKey"] = items_by_id[source_id].get("issueKey")
@@ -1012,6 +1489,8 @@ class NativeTrackerReader:
                             "clearingCondition": None,
                             "ownerLabel": None,
                             "primaryContribution": field == "milestone",
+                            "contributionRole": "primary" if field == "milestone" else None,
+                            "scopeRole": None,
                             "entryEvidenceIds": [],
                             "exitEvidenceIds": [],
                             "evidenceSourceIds": [],
@@ -1136,14 +1615,21 @@ class NativeTrackerReader:
             ):
                 adjacency[edge["sourceId"]].add(edge["targetId"])
                 adjacency[edge["targetId"]].add(edge["sourceId"])
-        launch_connected = set(milestones)
-        launch_queue = sorted(milestones)
-        while launch_queue:
-            item_id = launch_queue.pop(0)
-            for related_id in sorted(adjacency[item_id]):
-                if related_id not in launch_connected:
-                    launch_connected.add(related_id)
-                    launch_queue.append(related_id)
+        active_memberships = [
+            edge for edge in edges
+            if edge["relationshipType"] == "part-of-launch" and edge["state"] == "active"
+        ]
+        if active_memberships:
+            launch_connected = {edge["sourceId"] for edge in active_memberships}
+        else:
+            launch_connected = set(milestones)
+            launch_queue = sorted(milestones)
+            while launch_queue:
+                item_id = launch_queue.pop(0)
+                for related_id in sorted(adjacency[item_id]):
+                    if related_id not in launch_connected:
+                        launch_connected.add(related_id)
+                        launch_queue.append(related_id)
 
         today = datetime.now(timezone.utc).date()
         for item in items:
@@ -1168,10 +1654,118 @@ class NativeTrackerReader:
             "cycleItemIds": cycle_item_ids,
         }, findings
 
+    def _launch_findings(
+        self,
+        items: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
+        launches = [item for item in items if item.get("primaryType") == "launch"]
+        launch_keys: dict[str, list[str]] = {}
+        active_memberships = [edge for edge in edges if edge.get("relationshipType") == "part-of-launch" and edge.get("state") == "active"]
+        core_targets = {edge["targetId"] for edge in active_memberships if edge.get("scopeRole") == "core"}
+        for launch in launches:
+            key = str(launch.get("launchKey") or "").strip()
+            if not key:
+                findings.append(self._finding("launch-key-missing", "error", f"Launch {launch.get('issueKey') or launch['id']} has no launchKey.", item_ids=[launch["id"]]))
+            else:
+                launch_keys.setdefault(key.lower(), []).append(launch["id"])
+            workflow = str(launch.get("workflow") or "draft").lower()
+            if workflow != "draft" and (
+                not launch.get("_launchOwnerPresent")
+                or not launch.get("_launchAudienceCount")
+                or not launch.get("_launchScopeRevisionPresent")
+                or not launch.get("_launchEntryCriteriaCount")
+                or not launch.get("_launchExitCriteriaCount")
+                or launch["id"] not in core_targets
+            ):
+                findings.append(self._finding("launch-fields-incomplete", "error", f"Launch {launch.get('issueKey') or launch['id']} is past draft with incomplete lifecycle fields or no active core member.", item_ids=[launch["id"]]))
+            if launch.get("actualDate") and workflow not in {"released", "cancelled"}:
+                findings.append(self._finding("launch-actual-date-unreleased", "error", f"Launch {launch.get('issueKey') or launch['id']} has actualDate before release or cancellation.", item_ids=[launch["id"]]))
+            if launch.get("_storedProgress"):
+                findings.append(self._finding("launch-progress-hand-set", "warning", f"Launch {launch.get('issueKey') or launch['id']} stores progress; derived launch rollup remains authoritative.", item_ids=[launch["id"]]))
+        for key, ids in launch_keys.items():
+            if len(ids) > 1:
+                findings.append(self._finding("launch-key-duplicate", "error", f"Multiple launches share launchKey {key}.", item_ids=sorted(ids)))
+
+        adjacency: dict[str, list[str]] = {}
+        for edge in active_memberships:
+            adjacency.setdefault(edge["sourceId"], []).append(edge["targetId"])
+        visiting: set[str] = set()
+        visited: set[str] = set()
+        cycle_nodes: set[str] = set()
+        def visit(node: str) -> None:
+            if node in visiting:
+                cycle_nodes.add(node)
+                return
+            if node in visited:
+                return
+            visiting.add(node)
+            for target in sorted(adjacency.get(node, [])):
+                if target in visiting:
+                    cycle_nodes.update((node, target))
+                visit(target)
+            visiting.remove(node)
+            visited.add(node)
+        for node in sorted(adjacency):
+            visit(node)
+        if cycle_nodes:
+            findings.append(self._finding("membership-cycle", "error", "Active launch memberships contain a cycle.", item_ids=sorted(cycle_nodes), relationship_ids=[edge["id"] for edge in active_memberships if edge["sourceId"] in cycle_nodes and edge["targetId"] in cycle_nodes]))
+
+        if active_memberships:
+            member_ids = {edge["sourceId"] for edge in active_memberships}
+            for launch in launches:
+                key = str(launch.get("launchKey") or "").lower()
+                if not key:
+                    continue
+                for item in items:
+                    if item["id"] != launch["id"] and key in {str(tag).lower() for tag in item.get("tags", [])} and item["id"] not in member_ids:
+                        findings.append(self._finding("tag-membership-mismatch", "warning", f"{item.get('issueKey') or item['id']} is tagged {launch.get('launchKey')} but has no active launch membership.", item_ids=[item["id"], launch["id"]]))
+        return findings
+
+    def _apply_launch_rollups(self, items: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
+        by_id = {item["id"]: item for item in items}
+        memberships = [edge for edge in edges if edge.get("relationshipType") == "part-of-launch" and edge.get("state") == "active"]
+        computing: set[str] = set()
+        def rollup(launch_id: str) -> dict[str, Any]:
+            launch = by_id[launch_id]
+            existing = launch.get("launchRollup")
+            if isinstance(existing, dict):
+                return existing
+            if launch_id in computing:
+                return {"derivedProgress": 0}
+            computing.add(launch_id)
+            scoped = [(edge, by_id.get(edge["sourceId"])) for edge in memberships if edge["targetId"] == launch_id]
+            core = [item for edge, item in scoped if item and edge.get("scopeRole") == "core"]
+            supporting = [item for edge, item in scoped if item and edge.get("scopeRole") == "supporting"]
+            reviews = [item for edge, item in scoped if item and edge.get("scopeRole") == "review"]
+            progress_values: list[float] = []
+            for item in core:
+                if item.get("primaryType") == "launch":
+                    progress_values.append(float(rollup(item["id"]).get("derivedProgress", 0)))
+                else:
+                    progress_values.append(self._effective_deliverable_progress(item))
+            scoped_ids = {launch_id, *[edge["sourceId"] for edge, _ in scoped if edge.get("scopeRole") in {"core", "acceptance"}]}
+            blockers = [edge for edge in edges if edge.get("relationshipType") == "depends-on" and edge.get("state") == "active" and edge.get("hardness") == "hard-serial" and edge.get("sourceId") in scoped_ids and edge.get("targetId") in by_id and not self._is_complete(by_id[edge["targetId"]])]
+            result = {
+                "coreMilestonesCompleted": sum(item.get("primaryType") == "milestone" and self._is_complete(item) for item in core),
+                "coreMilestonesTotal": sum(item.get("primaryType") == "milestone" for item in core),
+                "supportingItemsCompleted": sum(self._is_complete(item) for item in supporting),
+                "supportingItemsTotal": len(supporting),
+                "reviewsCleared": sum(self._is_complete(item) for item in reviews),
+                "reviewsTotal": len(reviews),
+                "derivedProgress": int(sum(progress_values) / len(progress_values) + 0.5) if progress_values else 0,
+                "activeHardBlockers": len(blockers),
+            }
+            launch["launchRollup"] = result
+            launch["progress"] = result["derivedProgress"]
+            computing.remove(launch_id)
+            return result
+        for launch_id in sorted(item["id"] for item in items if item.get("primaryType") == "launch"):
+            rollup(launch_id)
+
     def _derive_item_health_and_risk(self, item: dict[str, Any], today: Any) -> None:
-        done = str(item.get("workflow") or "").lower() in {
-            "done", "completed", "achieved", "closed", "shipped", "implemented"
-        }
+        done = self._is_complete(item)
         health = item.get("scheduleHealth") if item.get("scheduleHealth") in {"on-track", "at-risk", "late"} else "on-track"
         health_reasons: list[str] = []
         if health != "on-track":
@@ -1383,24 +1977,10 @@ class NativeTrackerReader:
             or "timeline-item" in item.get("typeTags", [])
         )
 
-    @staticmethod
-    def _is_active_executable(item: Mapping[str, Any]) -> bool:
-        complete_workflows = {
-            "done", "completed", "achieved", "closed", "shipped", "implemented"
-        }
-        if str(item.get("workflow") or "").lower() in complete_workflows:
+    def _is_active_executable(self, item: Mapping[str, Any]) -> bool:
+        if self._is_complete(item):
             return False
-        executable_types = {
-            "task",
-            "timeline-item",
-            "devops-item",
-            "prediclear-item",
-            "automation",
-            "mr",
-            "merge-request",
-            "pull-request",
-            "change-request",
-        }
+        executable_types = {str(value).lower() for value in self._registry["executableTypes"]}
         item_types = {
             str(item.get("primaryType") or "").lower(),
             *(str(tag).lower() for tag in item.get("typeTags", [])),
@@ -1638,14 +2218,81 @@ class NativeTrackerReader:
             "archived": bool(row["archived"]),
         }
 
-    @staticmethod
-    def _source(schema_fingerprint: str) -> dict[str, Any]:
+    def _source(self, schema_fingerprint: str) -> dict[str, Any]:
         return {
             "backend": "sqlite",
             "mode": "read-only",
             "schemaAdapter": SCHEMA_ADAPTER,
             "schemaFingerprint": schema_fingerprint,
+            "registryVersion": self._registry["version"],
+            "registryOverrideActive": self._registry_override_active,
+            "registryHash": self._registry_hash,
         }
+
+    def _registry_findings(self) -> list[dict[str, Any]]:
+        if not self._registry_override_error:
+            return []
+        return [self._finding("registry-override-invalid", "warning", self._registry_override_error)]
+
+    @staticmethod
+    def _validation_block(findings: list[dict[str, Any]]) -> dict[str, Any]:
+        state = "fail" if any(item.get("severity") == "error" for item in findings) else "warn" if findings else "pass"
+        return {
+            "state": state,
+            "findings": findings,
+            "orphanCount": sum(item.get("code") == "orphan-endpoint" for item in findings),
+            "duplicateCount": sum(item.get("code") == "duplicate-active-membership" for item in findings),
+            "cycleCount": sum(item.get("code") == "membership-cycle" for item in findings),
+        }
+
+    def _watermark(self, fingerprint: str, item_count: int, relationship_count: int, started: float) -> dict[str, Any]:
+        return {
+            "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "schemaAdapter": SCHEMA_ADAPTER,
+            "schemaFingerprint": fingerprint,
+            "registryVersion": self._registry["version"],
+            "registryOverrideActive": self._registry_override_active,
+            "registryHash": self._registry_hash,
+            "sourceItemCount": item_count,
+            "sourceRelationshipCount": relationship_count,
+            "durationMs": round((time.perf_counter() - started) * 1000, 2),
+        }
+
+    def _fit_graph_result(self, result: dict[str, Any], sort: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        removed = False
+        findings_trimmed = False
+        while self._json_size(result) > MAX_RESULT_BYTES and (result["boundaryNodes"] or result["nodes"] or result["edges"] or result["validation"]["findings"]):
+            removed = True
+            if result["boundaryNodes"]:
+                result["boundaryNodes"].pop()
+            elif result["nodes"]:
+                result["nodes"].pop()
+            elif result["edges"]:
+                result["edges"].pop()
+            else:
+                result["validation"]["findings"].pop()
+                findings_trimmed = True
+        if removed:
+            retained = {item["id"] for item in [*result["nodes"], *result["boundaryNodes"]]}
+            result["edges"] = [edge for edge in result["edges"] if edge.get("sourceId") in retained and edge.get("targetId") in retained]
+            result["page"]["truncated"] = True
+            if sort:
+                last_id = result["nodes"][-1]["id"] if result["nodes"] else result["edges"][-1]["id"] if result["edges"] else None
+                if last_id:
+                    result["page"]["nextCursor"] = encode_cursor(sort, last_id)
+        result["page"]["returnedCount"] = len(result["nodes"]) + len(result["boundaryNodes"]) + len(result["edges"])
+        if findings_trimmed:
+            result["validation"]["findings"].append(self._finding(
+                "validation-findings-truncated", "warning",
+                "Validation findings were truncated to keep the bounded response safe.",
+            ))
+            result["validation"]["state"] = "fail" if any(item.get("severity") == "error" for item in result["validation"]["findings"]) else "warn"
+        if self._json_size(result) > MAX_RESULT_BYTES:
+            raise ReaderError("RESPONSE_TOO_LARGE", "The graph response exceeded the safe response limit.")
+        for item in result["nodes"]:
+            for key in [entry for entry in item if entry.startswith("_")]:
+                item.pop(key, None)
+        return result
 
     @staticmethod
     def _parse_type_tags(raw: Any) -> list[str]:

@@ -11,6 +11,8 @@ const required = [
   'dist/reader/server.py',
   'dist/reader/database.py',
   'dist/reader/contracts.py',
+  'dist/reader/registry.py',
+  'dist/reader/registry.json',
 ];
 
 for (const relativePath of required) {

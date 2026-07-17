@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.4.0 - 2026-07-16
+
+- Add a versioned bundled registry with safe workspace overrides for terminal
+  statuses, roles, and saved query templates.
+- Add `native_tracker_query` with validated predicates, allowlisted fields and
+  operators, parameterized SQL, deterministic cursor paging, and total counts.
+- Add `native_tracker_traverse` with rooted membership/context BFS, boundary
+  nodes, launch rollups, lifecycle and relationship validation, and fail-closed
+  launch views.
+- Add all eleven normalized relationship types, explicit `scopeRole`, launch
+  lifecycle findings, nested memberships, and explicit-membership semantics.
+- Add launch-rooted timeline sync and a document-only launch filter with member,
+  boundary, truncation, validation, and registry disclosures.
+- Add scale fixtures/benchmarks, query/traversal tests, workspace launch schemas,
+  and updated security, compatibility, and agent guidance.
+
 - Add a complete agent runbook with exact tool arguments, durable
   mutation/resync sequencing, normalized relationship examples, filter and PR
   behavior, safety constraints, and recovery guidance.
