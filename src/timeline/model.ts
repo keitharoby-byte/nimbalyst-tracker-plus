@@ -116,6 +116,7 @@ export function parseTimelineDocument(raw: string): TimelineDocument {
     : [];
   const rawCriticalPath = isRecord(rawSnapshot.criticalPath) ? rawSnapshot.criticalPath : {};
   const snapshot: TimelineSnapshot = {
+    ...(typeof rawSnapshot.generationId === 'string' ? { generationId: rawSnapshot.generationId } : {}),
     generatedAt: typeof rawSnapshot.generatedAt === 'string' ? rawSnapshot.generatedAt : null,
     items,
     milestones: items.filter((item) => item.primaryType === 'milestone' && !item.boundary),

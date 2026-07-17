@@ -93,6 +93,23 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(launch["launchRollup"]["activeHardBlockers"], 1)
         self.assertEqual(result["validation"]["state"], "pass")
 
+    def test_launch_traversal_stops_at_boundary_nodes(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "beyond-prior", "M-BEFORE-ALPHA", "milestone", {"title": "Earlier launch", "status": "active"})
+            self._link(connection, "link-beyond", "REL-BEYOND", "prior", "beyond-prior", "depends-on")
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["FFP-1"],
+            "membership": {"relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1},
+            "expand": {"relationshipTypes": ["depends-on"], "direction": "both", "maxDepth": 2, "edgeWhere": {"status": ["active"]}, "externalEndpointBehavior": "boundary"},
+        })
+
+        self.assertEqual([node["id"] for node in result["boundaryNodes"]], ["prior"])
+        self.assertNotIn("beyond-prior", {node["id"] for node in [*result["nodes"], *result["boundaryNodes"]]})
+        self.assertNotIn("link-beyond", {edge["id"] for edge in result["edges"]})
+
     def test_launch_rooted_snapshot_reports_members_and_boundaries(self) -> None:
         snapshot = self.reader.timeline_snapshot({"workspacePath": self.workspace, "includeUnscheduled": True, "maxItems": 50, "launch": "FFP-1"})
         self.assertEqual(snapshot["source"]["rootLaunch"], "FFP-1")

@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Add validation severity/code summaries and deterministic prior/current
+  projection deltas to timeline sync receipts.
+- Preserve curated timeline title, view, and filters while assigning each
+  generated snapshot a durable generation identifier.
+- Classify tagged standalone projection seeds separately from broken orphans,
+  and stop launch traversal after including one-hop boundary dependencies.
+
 ## 0.4.0 - 2026-07-16
 
 - Add a versioned bundled registry with safe workspace overrides for terminal

@@ -108,6 +108,7 @@ export interface CriticalPathSummary {
 }
 
 export interface TimelineSnapshot {
+  generationId?: string;
   generatedAt: string | null;
   items: TimelineItem[];
   milestones: TimelineItem[];

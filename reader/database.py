@@ -645,6 +645,7 @@ class NativeTrackerReader:
         if expand:
             context_seen = set(resolved_roots) | member_ids
             frontier = sorted(context_seen)
+            stop_at_boundary = membership is not None and expand["externalEndpointBehavior"] == "boundary"
             for depth in range(1, expand["maxDepth"] + 1):
                 next_frontier: set[str] = set()
                 for node_id in frontier:
@@ -656,7 +657,9 @@ class NativeTrackerReader:
                             continue
                         selected_edge_ids.add(edge["id"])
                         if next_id in items_by_id:
-                            if next_id not in context_seen:
+                            if stop_at_boundary and next_id not in context_seen:
+                                boundary_ids.add(next_id)
+                            elif next_id not in context_seen:
                                 next_frontier.add(next_id)
                                 node_depth.setdefault(next_id, depth + 10)
                 context_seen.update(next_frontier)
@@ -1915,14 +1918,20 @@ class NativeTrackerReader:
                     )
             governed_types = {"task", "plan", "feature", "adr", "test", "evidence", "evidence-packet"}
             if item["primaryType"] != "milestone" and item_types.intersection(governed_types) and incident[item["id"]] == 0:
-                findings.append(
-                    self._finding(
+                if item.get("tags") and not item.get("_launchScopeExplicit"):
+                    findings.append(self._finding(
+                        "standalone-seed",
+                        "info",
+                        f"{item.get('issueKey') or item['id']} is an intentionally tagged standalone projection seed with no typed relationship.",
+                        item_ids=[item["id"]],
+                    ))
+                else:
+                    findings.append(self._finding(
                         "orphan-item",
                         "warning",
                         f"{item.get('issueKey') or item['id']} has no active or cleared typed relationship or evidence reference.",
                         item_ids=[item["id"]],
-                    )
-                )
+                    ))
         return findings
 
     @staticmethod

@@ -124,7 +124,8 @@ examples, filter behavior, PR references, and recovery steps.
 - `native_tracker_traverse` returns rooted members, edges, boundary context,
   launch rollups, validation, and provenance.
 - `native_tracker_sync_timeline` projects current native tracker data into a
-  workspace-relative `.ntimeline` document.
+  workspace-relative `.ntimeline` document and returns validation and
+  prior/current projection deltas in its sync receipt.
 - `native_tracker_generate_milestone_report` writes a bounded Markdown report
   for one or all major milestones.
 

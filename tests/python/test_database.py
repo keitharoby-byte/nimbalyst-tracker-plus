@@ -393,6 +393,24 @@ class NativeTrackerReaderTests(unittest.TestCase):
         ]
         self.assertEqual(orphaned, [])
 
+    def test_tagged_standalone_seed_is_distinct_from_broken_orphan(self) -> None:
+        base = {
+            "primaryType": "task",
+            "typeTags": ["task"],
+            "workflow": "open",
+            "ownerLabel": "PM",
+        }
+        findings = self.reader._validate_timeline([
+            {**base, "id": "seed", "issueKey": "NIM-SEED", "tags": ["alpha-launch"], "_launchScopeExplicit": False},
+            {**base, "id": "orphan", "issueKey": "NIM-ORPHAN", "tags": [], "_launchScopeExplicit": True},
+        ], [])
+
+        by_code = {finding["code"]: finding for finding in findings}
+        self.assertEqual(by_code["standalone-seed"]["severity"], "info")
+        self.assertEqual(by_code["standalone-seed"]["itemIds"], ["seed"])
+        self.assertEqual(by_code["orphan-item"]["severity"], "warning")
+        self.assertEqual(by_code["orphan-item"]["itemIds"], ["orphan"])
+
     def test_milestone_report_surfaces_overdue_and_blocked_work(self) -> None:
         self._insert_timeline_items()
 

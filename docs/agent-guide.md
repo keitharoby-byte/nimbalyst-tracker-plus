@@ -182,8 +182,19 @@ Arguments:
   Keep separate `.ntimeline` files for separate launches.
 
 The result reports item, milestone, and relationship counts plus truncation and
-source metadata. If it is truncated, narrow the date range or remove irrelevant
-records before treating the projection as complete.
+source metadata. It also includes:
+
+- `validation.state`, total findings, severity counts, and a compact `byCode`
+  count map, so callers do not need to reopen the generated file to distinguish
+  warnings-only output from hard errors;
+- `delta.priorGenerationId` and `delta.currentGenerationId`;
+- sorted added/removed node and relationship IDs; and
+- prior/current/change milestone counts.
+
+The existing document title, view settings, and filters are retained when the
+file is regenerated. If the receipt is truncated or validation state is
+`fail`, narrow the projection or resolve the findings before replacing an
+official dashboard.
 
 The generated snapshot includes:
 
@@ -192,6 +203,13 @@ The generated snapshot includes:
 - primary milestone and launch-scope hydration;
 - schedule slack, deterministic risk reasons, and calculated critical path;
 - validation findings and projection provenance.
+
+Validation uses `standalone-seed` at info severity when a tagged, non-explicit
+launch item is intentionally present without a typed relationship. A genuinely
+unrelated item with no tag seed remains `orphan-item` at warning severity;
+missing relationship endpoints remain `orphan-endpoint` errors. Launch
+traversal includes a selected external prerequisite as a boundary node and the
+connecting edge, but does not expand through that boundary into its graph.
 
 ## `native_tracker_generate_milestone_report`
 

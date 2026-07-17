@@ -15,6 +15,7 @@ import {
 } from './contracts';
 import { NativeTrackerError, safeErrorResult } from './errors';
 import { PythonBridge } from './pythonBridge';
+import { prepareTimelineSync } from './timeline/sync';
 
 const COMMENT_ALLOWED_KEYS = new Set(['trackerId', 'limit', 'cursor', 'since', 'order']);
 const TIMELINE_ALLOWED_KEYS = new Set(['outputPath', 'includeUnscheduled', 'maxItems', 'from', 'to', 'launch']);
@@ -464,34 +465,22 @@ export async function activate(context: BackendContext): Promise<{
       const snapshot = await bridge.request('timeline_snapshot', readerParams(params)) as Record<string, unknown>;
       const target = await confinedOutputPath(workspacePath, String(params.outputPath));
       const existing = await readTimelineShell(target);
-      const document = {
-        version: 2,
-        title: typeof existing.title === 'string' ? existing.title : 'Tracker Timeline',
-        view: existing.view && typeof existing.view === 'object'
-          ? existing.view
-          : { mode: 'timeline', zoom: 'week', showUnscheduled: true, compactRows: true, fitToWidth: true, summaryRows: false },
-        filters: {
-          ...(existing.filters && typeof existing.filters === 'object' ? existing.filters : {}),
-          includeUnscheduled: params.includeUnscheduled,
-          ...(params.from ? { from: params.from } : {}),
-          ...(params.to ? { to: params.to } : {}),
-          ...(params.launch ? { launch: params.launch } : {}),
-        },
-        snapshot,
-      };
-      await atomicWrite(target, `${JSON.stringify(document, null, 2)}\n`);
-      const page = snapshot.page as Record<string, unknown> | undefined;
-      const milestones = snapshot.milestones as unknown[] | undefined;
-      const relationships = snapshot.relationships as unknown[] | undefined;
+      const prepared = prepareTimelineSync(existing, snapshot, params, randomUUID());
+      await atomicWrite(target, `${JSON.stringify(prepared.document, null, 2)}\n`);
+      const page = prepared.snapshot.page as Record<string, unknown> | undefined;
+      const milestones = prepared.snapshot.milestones as unknown[] | undefined;
+      const relationships = prepared.snapshot.relationships as unknown[] | undefined;
       return {
         action: 'timeline-synced',
         file: params.outputPath,
-        generatedAt: snapshot.generatedAt,
+        generatedAt: prepared.snapshot.generatedAt,
         itemCount: page?.returned ?? 0,
         milestoneCount: milestones?.length ?? 0,
         relationshipCount: relationships?.length ?? 0,
         truncated: Boolean(page?.queryTruncated || page?.responseTruncated),
-        source: snapshot.source,
+        validation: prepared.validation,
+        delta: prepared.delta,
+        source: prepared.snapshot.source,
       };
     } catch (error) {
       return safeErrorResult(error);
