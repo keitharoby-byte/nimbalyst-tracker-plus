@@ -32,6 +32,10 @@ upgrade in place despite the broader Tracker+ name.
   into a versioned registry with a safe read-only workspace override.
 - Add launch-rooted timeline sync plus a persistent launch selector and
   member/boundary/truncation/validation disclosure in the custom editor.
+- Preserve curated timeline metadata during sync and return compact validation
+  summaries, deterministic projection deltas, and generation identifiers.
+- Distinguish intentional standalone seeds from broken orphans and stop graph
+  expansion after including a selected cross-launch boundary dependency.
 
 ## Previously in 0.3.0
 
@@ -51,8 +55,10 @@ upgrade in place despite the broader Tracker+ name.
 
 ## Timeline and relationships
 
-The workspace includes three native custom tracker types:
+The launch relationship model uses four native custom tracker types:
 
+- `launch` identifies a first-class launch root, lifecycle, target window, and
+  release outcome.
 - `timeline-item` separates workflow, schedule health, execution constraint,
   risk inputs, forecasts, launch scope, and optional pull-request number/URL.
 - `milestone` uses the same independent state dimensions plus milestone target,
@@ -87,8 +93,8 @@ visible-item count apply to Timeline and Graph and survive a tracker re-sync.
 
 The item inspector is hidden by default so the timeline uses the full editor
 width. Selecting an item opens it contextually, and its close button clears the
-selection and collapses the inspector again. Its tracker-reference chip uses
-Nimbalyst's live contextual navigation. A separate pull-request section shows
+selection and collapses the inspector again. Its safely encoded tracker link
+uses Nimbalyst's contextual navigation. A separate pull-request section shows
 `pullRequestNumber` and opens `pullRequestUrl` when it is a valid HTTPS URL; a
 number-only reference remains visible when no GitHub URL has been stored.
 Imported GitHub pull-request items can also resolve this section from their
@@ -139,8 +145,8 @@ go through Nimbalyst's built-in `tracker_create`, `tracker_update`, and
 1. Confirm **Tracker+** is enabled in Nimbalyst Extensions. New installs
    default the safe renderer contribution to enabled; backend consent remains
    first-use and opt-in.
-2. Create `milestone`, `timeline-item`, and `timeline-link` tracker records in
-   the native tracker.
+2. Create `launch`, `milestone`, `timeline-item`, and `timeline-link` tracker
+   records in the native tracker.
 3. Create a Tracker Timeline from the New File menu, or call
    `native_tracker_sync_timeline` with an `.ntimeline` output path.
 4. Open the timeline file and switch among Timeline, Graph, and Reports.
@@ -173,12 +179,12 @@ available as the tool runbook.
 ```powershell
 npm install
 npm test
-npm run build
 npm run verify:package
 ```
 
 Build, install, reload, and inspect the extension through Nimbalyst Extension
-Dev Tools as described in [installation.md](docs/installation.md).
+Dev Tools—not a substitute npm build—as described in
+[installation.md](docs/installation.md).
 
 ## License
 

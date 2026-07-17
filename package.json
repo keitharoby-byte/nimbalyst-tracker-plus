@@ -1,7 +1,18 @@
 {
   "name": "com-prediclear-nimbalyst-tracker-plus",
   "version": "0.4.0",
+  "description": "Read-only Nimbalyst tracker queries, bounded relationship traversal, and auditable timeline projections.",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keitharoby-byte/nimbalyst-tracker-plus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/keitharoby-byte/nimbalyst-tracker-plus/issues"
+  },
+  "homepage": "https://github.com/keitharoby-byte/nimbalyst-tracker-plus#readme",
+  "keywords": ["nimbalyst", "tracker", "timeline", "relationships"],
   "type": "module",
   "scripts": {
     "build": "vite build && vite build --config vite.backend.config.ts && node scripts/copy-reader-assets.mjs",

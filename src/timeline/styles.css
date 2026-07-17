@@ -232,6 +232,9 @@
 .nt-kicker { padding-left: 6px; color: var(--nim-text); border-left: 3px solid var(--nim-primary); font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
 .nt-tracker-reference { display: flex; align-items: center; justify-content: space-between; gap: 9px; min-height: 28px; }
 .nt-tracker-reference > span { color: var(--nim-text-muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.nt-tracker-link { max-width: 70%; overflow: hidden; color: var(--nim-primary); font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.nt-tracker-link:hover { text-decoration: underline; }
+.nt-tracker-link:focus-visible { outline: 2px solid var(--nim-primary); outline-offset: 2px; }
 .nt-state-stack { display: grid; gap: 5px; margin-top: 16px; }
 .nt-state-stack div { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border: 1px solid var(--nim-border); border-radius: 7px; background: var(--nim-bg); }
 .nt-state-stack span { color: var(--nim-text-muted); font-size: 9px; text-transform: uppercase; }

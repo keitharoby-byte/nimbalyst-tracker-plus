@@ -2,7 +2,7 @@
 
 ## Validated fixture
 
-- Validation date: 2026-07-16
+- Validation date: 2026-07-17
 - Nimbalyst: 0.68.1 packaged build
 - Electron / embedded Node: 41.8.0 / 24.16.0
 - Extension: Tracker+ 0.4.0
@@ -17,12 +17,13 @@
 The extension built and installed successfully, and installed manifest/backend/
 reader/registry hashes matched the final build. The package declares six
 backend methods and one `.ntimeline` custom editor using only
-`mcp-server-register` and `workspace-files`. Twenty-seven Python and seven
-renderer/model/contrast checks passed. The development hot-reload command was
-acknowledged, but the current running host's status probe still returned
-"not found or not loaded" and retained its previously loaded renderer. Per the
-project runbook, Nimbalyst was not restarted; fresh-host activation remains the
-only outstanding live check.
+`mcp-server-register` and `workspace-files`. Thirty-nine Python and nine
+backend/renderer/model/contrast checks passed. The development hot-reload
+and restart paths were exercised. After removing a renderer import unavailable
+in the Nimbalyst 0.68.1 host runtime, the activation log was clean and
+`extension_get_status` reported the extension loaded with its `.ntimeline`
+editor and New File contribution. Package verification guards against
+reintroducing that unsupported runtime import.
 
 The adapter requires the `tracker_items` columns listed in
 `reader/contracts.py`. It records a SHA-256 fingerprint of ordered column names

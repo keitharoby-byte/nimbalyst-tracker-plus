@@ -22,6 +22,8 @@ proceed.
 
 ## Native tracker types
 
+- `launch` stores the first-class launch key, lifecycle, target window, and
+  release outcome used as an explicit traversal root.
 - `timeline-item` stores schedule, forecast, workflow, execution constraint,
   risk inputs, owner, launch scope, gate, and ProjectState revision.
 - `milestone` stores the same independent dimensions plus target date, report
@@ -37,10 +39,15 @@ The target-side label is generated when rendering a backlink:
 
 | Stored edge | Forward label | Generated inverse label |
 | --- | --- | --- |
+| item `part-of-launch` launch | Part of launch | Contains launch member |
+| plan `governs` item | Governs | Is governed by |
 | task `depends-on` proof | Depends on | Is predecessor of |
 | task `contributes-to` milestone | Contributes to | Receives contribution from |
 | MR `reviews` milestone | Reviews | Is reviewed by |
 | evidence `evidences` task | Evidences | Is evidenced by |
+| item `precedes` item | Precedes | Follows |
+| item `enables` item | Enables | Is enabled by |
+| item `coordinates-with` item | Coordinates with | Coordinates with |
 | task `implements` plan | Implements | Is implemented by |
 | item `related` item | Related to | Related to |
 
@@ -101,13 +108,15 @@ Every derived color has a rationale array in the snapshot.
   entry/exit evidence on that edge.
 - Every hard-serial edge has an owner and clearing condition.
 - Hard-dependency cycles are errors.
-- Orphan tasks, plans, features, ADRs, tests, and evidence packets are warnings.
+- Broken relationship orphans are warnings; intentionally tag-seeded
+  standalone projection items use a distinct informational finding.
 - Malformed or duplicate normalized edges are reported.
 
 ## Durable projection watermark
 
 Every `.ntimeline` view displays:
 
+- snapshot generation identifier;
 - tracker snapshot timestamp;
 - tracker schema fingerprint;
 - ProjectState revision, or `unavailable` when no native record supplies one;
@@ -115,6 +124,9 @@ Every `.ntimeline` view displays:
 
 The JSON document is a bounded, reproducible projection. It contains no tracker
 bodies, comments, raw identity objects, deleted records, or archived records.
+Regeneration preserves the document title, view, and filters. Its sync receipt
+summarizes validation severity/codes and reports deterministic prior/current
+node, relationship, milestone, and generation deltas.
 
 ## Acceptance criteria
 
@@ -122,7 +134,11 @@ bodies, comments, raw identity objects, deleted records, or archived records.
 - A dependency does not imply an execution blocker.
 - One native `timeline-link` produces one projected edge and one generated
   backlink label.
-- All six relationship types render distinctly.
+- All eleven relationship types render distinctly.
+- Launch traversal includes selected external boundary nodes and edges without
+  expanding through those nodes.
+- Timeline regeneration preserves curated metadata and returns deterministic
+  validation and projection-delta summaries.
 - Timeline bars/nodes use schedule-health color, while workflow and execution
   constraint remain separately visible.
 - Risk levels, rationales, slack, critical path, cycles, and governance findings

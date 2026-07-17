@@ -27,15 +27,15 @@ projection/report files.
 
 The installed extension and `.ntimeline` editor are available across Nimbalyst
 projects. Each call is still scoped to the workspace associated with that AI
-session. Install the supplied `timeline-item` and `milestone` schemas in each
-workspace that needs native schedule and relationship fields, including the
-`timeline-link` schema.
+session. Install the supplied `launch`, `timeline-item`, `milestone`, and
+`timeline-link` schemas in each workspace that needs launch, schedule, and
+relationship fields.
 
 ## First timeline
 
-1. Define or copy the `timeline-item`, `milestone`, and `timeline-link` schemas into
-   `.nimbalyst/trackers`.
-2. Create native milestone and timeline records, then create one
+1. Define or copy the `launch`, `timeline-item`, `milestone`, and
+   `timeline-link` schemas into `.nimbalyst/trackers`.
+2. Create native launch, milestone, and timeline records, then create one
    `timeline-link` record per source/type/target edge.
 3. Call `native_tracker_sync_timeline` with an output such as
    `Tracker Timeline.ntimeline`.

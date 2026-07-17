@@ -345,6 +345,10 @@ export function itemReference(item: TimelineItem): string {
   return item.issueKey || item.id;
 }
 
+export function trackerReferenceHref(item: TimelineItem): string {
+  return `nimbalyst://${encodeURIComponent(itemReference(item))}`;
+}
+
 export function relationshipLabel(edge: TimelineRelationship, inverse = false): string {
   return inverse ? RELATIONSHIP_LABELS[edge.relationshipType].inverse : RELATIONSHIP_LABELS[edge.relationshipType].forward;
 }

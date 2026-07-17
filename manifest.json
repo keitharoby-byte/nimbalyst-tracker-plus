@@ -2,7 +2,7 @@
   "id": "com.prediclear.nimbalyst-native-tracker-comments",
   "name": "Tracker+",
   "version": "0.4.0",
-  "description": "Query and traverse launch relationships, project tracker timelines, and report schedule, risk, and milestone controls.",
+  "description": "Read-only tracker queries, bounded relationship traversal, and auditable timeline, risk, and milestone projections.",
   "author": "PrediClear",
   "main": "dist/index.js",
   "styles": "dist/index.css",

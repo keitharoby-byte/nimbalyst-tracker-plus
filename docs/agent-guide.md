@@ -266,8 +266,9 @@ still displayed when no URL exists. Imported items tagged as pull requests can
 also derive both values from a native `github://owner/repository#number`
 origin URN.
 
-The inspector uses Nimbalyst's host-owned tracker-reference chip. Select it to
-open the live tracker item; do not construct a `nimbalyst://` URL manually.
+The inspector uses a safely encoded Nimbalyst tracker-reference link. Select it
+to open the live tracker item. Agents should use the projected reference rather
+than constructing or guessing a `nimbalyst://` URL themselves.
 
 ## Normalized relationship records
 

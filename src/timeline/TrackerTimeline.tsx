@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { TrackerReferenceChip, useEditorLifecycle } from '@nimbalyst/extension-sdk';
+import { useEditorLifecycle } from '@nimbalyst/extension-sdk';
 import type { EditorHostProps } from '@nimbalyst/extension-sdk';
 
 import {
@@ -12,6 +12,7 @@ import {
   itemMatchesFilters,
   launchFilterSelection,
   itemReference,
+  trackerReferenceHref,
   milestoneSummaries,
   orderByPrimaryMilestone,
   parseTimelineDocument,
@@ -597,7 +598,7 @@ function ItemDetails({ item, relationships, items, onSelect, onClose }: {
       <h2>{item.title}</h2>
       <div className="nt-tracker-reference">
         <span>Tracker item</span>
-        <TrackerReferenceChip referenceKey={itemReference(item)} variant="compact" />
+        <a className="nt-tracker-link" href={trackerReferenceHref(item)}>{itemReference(item)} ↗</a>
       </div>
       <div className="nt-state-stack">
         <StateLine label="Workflow" value={item.workflow || 'Not set'} className={`workflow-${slug(item.workflow)}`} />

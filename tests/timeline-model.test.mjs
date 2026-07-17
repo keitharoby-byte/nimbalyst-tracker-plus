@@ -11,6 +11,7 @@ import {
   orderByPrimaryMilestone,
   parseTimelineDocument,
   pullRequestReference,
+  trackerReferenceHref,
 } from '../src/timeline/model.ts';
 
 test('completion and schedule filters compose and pull request references stay safe', () => {
@@ -43,6 +44,10 @@ test('completion and schedule filters compose and pull request references stay s
     number: 7,
     url: null,
   });
+  assert.equal(
+    trackerReferenceHref({ ...document.snapshot.items[0], issueKey: 'NIM 1/#' }),
+    'nimbalyst://NIM%201%2F%23',
+  );
 
   const legacy = parseTimelineDocument(JSON.stringify({ version: 2, snapshot: { items: [] } }));
   assert.deepEqual(legacy.filters.completionStates, ['active', 'complete']);

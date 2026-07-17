@@ -24,6 +24,11 @@ if (readerFiles.some((file) => file.endsWith('.pyc') || file === '__pycache__'))
   throw new Error('Compiled Python cache files must not be packaged.');
 }
 
+const rendererBundle = await readFile(path.join(root, manifest.main), 'utf8');
+if (rendererBundle.includes('TrackerReferenceChip')) {
+  throw new Error('Renderer imports TrackerReferenceChip, which is unavailable in the validated Nimbalyst runtime.');
+}
+
 if (manifest.contributions.backendModules.some((module) =>
   module.permissions.includes('nimbalyst-database-write') ||
   module.permissions.includes('secrets-read')

@@ -4,14 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-- Add validation severity/code summaries and deterministic prior/current
-  projection deltas to timeline sync receipts.
-- Preserve curated timeline title, view, and filters while assigning each
-  generated snapshot a durable generation identifier.
-- Classify tagged standalone projection seeds separately from broken orphans,
-  and stop launch traversal after including one-hop boundary dependencies.
-
-## 0.4.0 - 2026-07-16
+## 0.4.0 - 2026-07-17
 
 - Add a versioned bundled registry with safe workspace overrides for terminal
   statuses, roles, and saved query templates.
@@ -24,6 +17,12 @@ All notable changes to this project are documented in this file.
   lifecycle findings, nested memberships, and explicit-membership semantics.
 - Add launch-rooted timeline sync and a document-only launch filter with member,
   boundary, truncation, validation, and registry disclosures.
+- Add validation severity/code summaries and deterministic prior/current
+  projection deltas to timeline sync receipts.
+- Preserve curated timeline title, view, and filters while assigning each
+  generated snapshot a durable generation identifier.
+- Classify tagged standalone projection seeds separately from broken orphans,
+  and stop launch traversal after including one-hop boundary dependencies.
 - Add scale fixtures/benchmarks, query/traversal tests, workspace launch schemas,
   and updated security, compatibility, and agent guidance.
 
@@ -32,8 +31,8 @@ All notable changes to this project are documented in this file.
   behavior, safety constraints, and recovery guidance.
 - Add persistent multi-select Completion and Schedule health filters to the
   Timeline and Graph views, including a one-click reset and visible-item count.
-- Replace the hand-built tracker URI with Nimbalyst's live tracker-reference
-  chip so inspector navigation resolves through the host.
+- Add a safely encoded tracker-reference link so inspector navigation resolves
+  through Nimbalyst without importing a host API absent from version 0.68.1.
 - Project pull-request numbers and HTTPS URLs from native tracker fields or an
   imported GitHub origin URN, and retain the PR number when no URL is available.
 - Preserve state-filter preferences when a timeline is re-synced and validate

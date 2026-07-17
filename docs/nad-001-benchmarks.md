@@ -29,6 +29,23 @@ the same schema/registry/source watermark. The cache must remain disposable
 and must never become tracker authority. A host feature request is the final
 escalation, not the first.
 
+## Live FFP-1 acceptance rehearsal
+
+Rehearsed read-only against the PrediClear workspace on 2026-07-17 using the
+bundled `launch-scope` saved traversal:
+
+- root `NIM-1596` (`FFP-1`) plus members `NIM-1550`–`NIM-1554`;
+- 24 selected relationships and 14 boundary nodes, including `NIM-1549`;
+- `page.truncated=false`, schema fingerprint
+  `4065c61d27932cf88fd78eeecf3ed849639c7e4e763cd648eab389db264838fa`,
+  and registry version 1;
+- zero error-severity findings and one warning:
+  `tag-membership-mismatch` for boundary plan `NIM-1549`.
+
+This satisfies the zero-error and boundary acceptance criteria while retaining
+the intentional warning that a launch-tagged record has no active membership
+edge. No tracker records were changed during the rehearsal.
+
 Sorted timed samples in milliseconds:
 
 - 1,500: query `57.12, 57.22, 59.43, 59.68, 59.85`; traversal
