@@ -150,6 +150,145 @@ and `expand` stages, an optional predicate `nodeWhere`, bounded `limits`, and
 `nodes`; external one-hop context is returned in `boundaryNodes` and excluded
 from rollups. `launch-scope` fails closed on truncation or validation errors.
 
+## Saved query and role search catalog
+
+Saved queries are versioned, parameterized templates from the effective
+Tracker+ registry. Prefer them over rebuilding common predicates in each agent
+session. The response echoes the template ID, version, validated parameters,
+and fully expanded definition under `query`, so callers can audit exactly what
+ran. Always inspect `page`, `validation`, and `watermark` before acting on the
+result.
+
+### Role resolution
+
+The bundled role catalog currently contains:
+
+| Role ID | Owner aliases | Attention tags |
+|---|---|---|
+| `project-manager` | `project-manager`, `pm` | `needs-pm-attention`, `needs-project-manager-attention` |
+
+Role IDs and aliases are matched case-insensitively against string owners and
+the native identity fields `username`, `name`, `displayName`, and `gitName`.
+Attention tags are also matched case-insensitively. The bundled role query uses
+this exact logic:
+
+```text
+not archived
+AND status is not terminal
+AND (owner matches any role alias OR tags contain any role attention tag)
+```
+
+Deleted rows are always excluded. Archived rows and `timeline-link` records are
+also excluded by default. The saved role query independently requires
+`archived=false`, so setting `includeArchived=true` does not broaden it. Results
+sort by priority descending, updated time descending, then stable ID ascending;
+the page limit is 100 and `totalCount` is included.
+
+Copy-paste role inbox query:
+
+```json
+{
+  "savedQuery": {
+    "id": "role-active-work-and-attention",
+    "params": { "roleId": "project-manager" }
+  }
+}
+```
+
+This is the normal heartbeat query. Read native comments only for returned
+items. To continue, repeat the identical saved query and parameters with the
+opaque `page.nextCursor`; never edit or reuse a cursor with another query.
+
+### Bundled saved queries
+
+| Template ID | Tool | Parameter | Selection and safety behavior |
+|---|---|---|---|
+| `role-active-work-and-attention` | `native_tracker_query` | `roleId` | Nonterminal, non-archived work whose owner matches a role alias **or** whose tags contain a role attention tag. Excludes relationship records by default; returns deterministic cursor pages and a total count. |
+| `launch-scope` | `native_tracker_traverse` | `launchKey` | Active depth-one launch members plus two bounded context levels across `governs`, `contributes-to`, `reviews`, `evidences`, and `depends-on`. External context is returned as boundary nodes. Fails closed on truncation or error-severity validation. |
+| `launch-hard-blockers` | `native_tracker_traverse` | `launchKey` | Active `hard-serial` `depends-on` edges around launch members, with external endpoints as boundaries. Fails closed on truncation; validation findings remain visible without failing warning-only runs. |
+| `launch-open-reviews` | `native_tracker_traverse` | `launchKey` | Active `reviews` edges for nonterminal launch members, with external endpoints as boundaries. Fails closed on truncation. |
+| `launch-unscheduled-executable-work` | `native_tracker_traverse` | `launchKey` | Nonterminal launch members with neither `dueDate` nor `forecastDate`. It does not expand context edges and reports rather than fails on truncation or validation. |
+
+All bundled launch traversals use active incoming `part-of-launch` membership at
+depth one. Traversal limits are at most 500 nodes and 1,000 edges. Boundary
+nodes are context, not launch members, and are excluded from launch rollups.
+
+Copy-paste launch queries:
+
+```json
+{
+  "savedQuery": {
+    "id": "launch-scope",
+    "params": { "launchKey": "FFP-1" }
+  }
+}
+```
+
+```json
+{
+  "savedQuery": {
+    "id": "launch-hard-blockers",
+    "params": { "launchKey": "FFP-1" }
+  }
+}
+```
+
+```json
+{
+  "savedQuery": {
+    "id": "launch-open-reviews",
+    "params": { "launchKey": "FFP-1" }
+  }
+}
+```
+
+```json
+{
+  "savedQuery": {
+    "id": "launch-unscheduled-executable-work",
+    "params": { "launchKey": "FFP-1" }
+  }
+}
+```
+
+### Extending the role catalog
+
+Add workspace-specific roles without rebuilding Tracker+ by creating
+`.nimbalyst/tracker-plus.registry.json`. For example:
+
+```json
+{
+  "roles": {
+    "quality-lead": {
+      "ownerAliases": ["quality-lead", "qa-lead", "ql"],
+      "attentionTags": ["needs-quality-attention", "needs-qa-attention"]
+    }
+  }
+}
+```
+
+The existing `role-active-work-and-attention` template immediately accepts
+`{"roleId":"quality-lead"}`. Role IDs must match
+`^[a-z0-9][a-z0-9-]{0,63}$`. Override roles require at least one owner alias;
+the attention-tag array may be empty. Role and saved-query entries merge by ID,
+while `terminalStatuses` replaces the entire bundled list when present.
+
+An invalid override is ignored as a whole. Bundled defaults remain active and
+every response reports `registry-override-invalid`. Overrides cannot change
+relationship types, scope roles, executable types, caps, or registry version.
+
+### Saved-query failures
+
+- `SAVED_QUERY_NOT_FOUND`: the template ID does not exist for that tool.
+- `SAVED_QUERY_PARAMS_INVALID`: parameters are missing, unexpected, malformed,
+  or reference an unregistered role.
+- `ROOT_NOT_FOUND` / `ROOT_AMBIGUOUS`: a traversal root cannot be resolved
+  uniquely in the current workspace.
+- `RESULT_TRUNCATED`: a fail-closed traversal exceeded its node or edge cap.
+- `VALIDATION_FAILED`: `launch-scope` encountered an error-severity finding.
+- `registry-override-invalid`: the workspace override was ignored; this is a
+  validation finding rather than a replacement for the bundled registry.
+
 ## `native_tracker_sync_timeline`
 
 Use this after native tracker, relationship, schedule, risk, or PR-reference

@@ -122,6 +122,9 @@ only—Tracker+ never invents item dates.
 New agents should start with the complete [Tracker+ agent guide](docs/agent-guide.md).
 It includes exact arguments, safe mutation/resync patterns, normalized-link
 examples, filter behavior, PR references, and recovery steps.
+Its [saved-query and role-search catalog](docs/agent-guide.md#saved-query-and-role-search-catalog)
+documents every bundled template, role expansion, copy-paste invocation,
+override rules, caps, and failure behavior.
 
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.

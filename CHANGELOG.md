@@ -25,6 +25,8 @@ All notable changes to this project are documented in this file.
   and stop launch traversal after including one-hop boundary dependencies.
 - Add scale fixtures/benchmarks, query/traversal tests, workspace launch schemas,
   and updated security, compatibility, and agent guidance.
+- Add a complete operator catalog for saved queries and role searches, including
+  copy-paste calls, role overrides, exclusions, caps, and failure semantics.
 
 - Add a complete agent runbook with exact tool arguments, durable
   mutation/resync sequencing, normalized relationship examples, filter and PR
