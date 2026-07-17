@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Add a complete agent runbook with exact tool arguments, durable
+  mutation/resync sequencing, normalized relationship examples, filter and PR
+  behavior, safety constraints, and recovery guidance.
 - Add persistent multi-select Completion and Schedule health filters to the
   Timeline and Graph views, including a one-click reset and visible-item count.
 - Replace the hand-built tracker URI with Nimbalyst's live tracker-reference

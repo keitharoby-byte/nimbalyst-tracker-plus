@@ -9,6 +9,11 @@ editor.
 - Generated output: `dist/` (never edit by hand)
 - Runtime permissions: `mcp-server-register`, `workspace-files`
 
+Agents operating the installed tools must follow
+[`docs/agent-guide.md`](./docs/agent-guide.md). It defines exact arguments,
+durable update/resync sequencing, normalized relationship rules, filter
+semantics, PR references, and error recovery.
+
 ## Development workflow
 
 1. Run `npm install` once.

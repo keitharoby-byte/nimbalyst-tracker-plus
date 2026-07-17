@@ -21,6 +21,10 @@ columns, and a read-only connection without printing tracker content.
 7. During iteration use `extension_reload`, then check `extension_get_status`
    and the main-process extension logs.
 
+For agent operation after installation, use [agent-guide.md](agent-guide.md).
+It distinguishes read-only orientation, native tracker mutations, and generated
+projection/report files.
+
 The installed extension and `.ntimeline` editor are available across Nimbalyst
 projects. Each call is still scoped to the workspace associated with that AI
 session. Install the supplied `timeline-item` and `milestone` schemas in each

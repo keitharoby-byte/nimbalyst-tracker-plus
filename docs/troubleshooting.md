@@ -31,6 +31,9 @@ timeout and never holds a connection between tool calls.
 Confirm that the extension is enabled and that backend consent has been
 granted. Use Nimbalyst Extension Dev Tools to inspect extension status and
 main-process extension logs; restarting Nimbalyst is not normally required.
+If install/reload reports success while the status helper lags, confirm that the
+installed manifest and bundle contain the current version and look for an
+`addon.activate` entry under the extension ID in the main-process log.
 
 ## `OUTPUT_DIRECTORY_NOT_FOUND`
 

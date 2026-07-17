@@ -101,6 +101,10 @@ only—Tracker+ never invents item dates.
 
 ## Agent tools
 
+New agents should start with the complete [Tracker+ agent guide](docs/agent-guide.md).
+It includes exact arguments, safe mutation/resync patterns, normalized-link
+examples, filter behavior, PR references, and recovery steps.
+
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.
 - `native_tracker_sync_timeline` projects current native tracker data into a
@@ -144,7 +148,8 @@ the editor against native validation items.
 
 See [security.md](docs/security.md) for the complete trust boundary and
 [timeline-plan.md](docs/timeline-plan.md) for the architecture and acceptance
-criteria.
+criteria. Agent operators should also keep [agent-guide.md](docs/agent-guide.md)
+available as the tool runbook.
 
 ## Development
 
