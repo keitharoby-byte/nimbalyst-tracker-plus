@@ -2289,7 +2289,7 @@ class NativeTrackerReader:
                 last_id = result["nodes"][-1]["id"] if result["nodes"] else result["edges"][-1]["id"] if result["edges"] else None
                 if last_id:
                     result["page"]["nextCursor"] = encode_cursor(sort, last_id)
-        result["page"]["returnedCount"] = len(result["nodes"]) + len(result["boundaryNodes"]) + len(result["edges"])
+        result["page"]["returnedCount"] = len(result["nodes"]) + len(result["boundaryNodes"])
         if findings_trimmed:
             result["validation"]["findings"].append(self._finding(
                 "validation-findings-truncated", "warning",

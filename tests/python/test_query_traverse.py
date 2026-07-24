@@ -220,6 +220,21 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual([node for node in included["nodes"]], [])
         self.assertEqual({edge["issueKey"] for edge in included["edges"]}, {"REL-1"})
 
+    def test_returned_count_counts_items_not_edges(self) -> None:
+        edges_only = self.reader.query_items({"workspacePath": self.workspace, "where": {"field": "issueKey", "op": "eq", "value": "REL-1"}, "includeRelationshipRecords": True})
+        self.assertEqual(edges_only["nodes"], [])
+        self.assertEqual(len(edges_only["edges"]), 1)
+        self.assertEqual(edges_only["page"]["returnedCount"], 0)
+
+        with_edges = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["FFP-1"],
+            "membership": {"relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1},
+            "expand": {"relationshipTypes": ["depends-on"], "direction": "both", "maxDepth": 1, "edgeWhere": {"status": ["active"]}, "externalEndpointBehavior": "boundary"},
+        })
+        self.assertTrue(with_edges["edges"])
+        self.assertEqual(with_edges["page"]["returnedCount"], len(with_edges["nodes"]) + len(with_edges["boundaryNodes"]))
+
     def test_query_clause_depth_cap_is_enforced(self) -> None:
         clause: dict[str, object] = {"field": "status", "op": "eq", "value": "open"}
         for _ in range(6):
