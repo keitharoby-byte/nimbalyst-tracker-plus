@@ -14,3 +14,8 @@ for (const entry of await readdir(source, { withFileTypes: true })) {
   if (!entry.isFile() || entry.name.endsWith('.pyc')) continue;
   await copyFile(path.join(source, entry.name), path.join(destination, entry.name));
 }
+
+await copyFile(
+  path.join(root, '.nimbalyst', 'trackers', 'timeline-item.yaml'),
+  path.join(destination, 'timeline-item.schema.yaml'),
+);

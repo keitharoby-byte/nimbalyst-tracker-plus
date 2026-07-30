@@ -107,6 +107,24 @@ export interface CriticalPathSummary {
   cycleItemIds: string[];
 }
 
+export interface TrackerSchemaDiscovery {
+  trackerType: string;
+  state: 'registered' | 'missing-with-live-rows' | 'not-registered-no-live-rows';
+  registered: boolean;
+  liveRowCount: number;
+  registryDirectory: string;
+  registeredSchemaPath?: string | null;
+  projectedRowCount?: number;
+  allLiveRowsProjected?: boolean;
+  repair?: {
+    mode: 'manual-preview-required';
+    automaticMutation: false;
+    templateId: string;
+    targetRelativePath: string;
+    instruction: string;
+  };
+}
+
 export interface TimelineSnapshot {
   generationId?: string;
   generatedAt: string | null;
@@ -127,6 +145,7 @@ export interface TimelineSnapshot {
     schemaAdapter?: string;
     schemaFingerprint?: string;
     projectStateRevision?: string;
+    schemaDiscovery?: TrackerSchemaDiscovery;
     [key: string]: unknown;
   };
 }

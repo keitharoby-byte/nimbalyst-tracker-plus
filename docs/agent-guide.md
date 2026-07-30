@@ -131,6 +131,14 @@ Direct predicates use `all`, `any`, `not`, or a field clause:
 requested `timeline-link` records appear only in `edges`. Always inspect the
 validation and watermark blocks.
 
+The watermark includes `schemaDiscovery` for `timeline-item`. State
+`missing-with-live-rows` means the rows remain readable but the current
+workspace has no matching schema registration. Treat the
+`timeline-item-schema-missing-with-live-rows` warning as a migration task:
+review the bundled template and register it manually. The receipt explicitly
+sets `repair.automaticMutation` to `false`; agents must not infer permission to
+write tracker schemas.
+
 ## `native_tracker_traverse`
 
 Use traversal for a rooted launch graph with explicit members and boundary
@@ -152,6 +160,8 @@ and `expand` stages, an optional predicate `nodeWhere`, bounded `limits`, and
 `failOn.truncation` / `failOn.validation`. Membership nodes are returned in
 `nodes`; external one-hop context is returned in `boundaryNodes` and excluded
 from rollups. `launch-scope` fails closed on truncation or validation errors.
+The traversal watermark carries the same `schemaDiscovery` receipt as queries,
+and timeline projections persist it under `snapshot.source` for UI review.
 
 ## Saved query and role search catalog
 

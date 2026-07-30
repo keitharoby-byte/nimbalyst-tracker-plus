@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from reader.contracts import ReaderError
 from reader.database import NativeTrackerReader
@@ -18,6 +19,14 @@ class QueryTraverseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.workspace = str(Path(self.tempdir.name).resolve())
+        tracker_schema_directory = Path(self.workspace) / ".nimbalyst" / "trackers"
+        tracker_schema_directory.mkdir(parents=True)
+        self.timeline_item_schema = tracker_schema_directory / "timeline-item.yaml"
+        self.timeline_item_schema.write_text(
+            "type: timeline-item\n"
+            "displayName: Timeline Item\n",
+            encoding="utf-8",
+        )
         self.db_path = Path(self.tempdir.name) / "fixture.sqlite"
         with closing(sqlite3.connect(self.db_path)) as connection:
             connection.executescript((ROOT / "fixtures/sql/tracker-schema-current.sql").read_text(encoding="utf-8"))
@@ -234,6 +243,121 @@ class QueryTraverseTests(unittest.TestCase):
         })
         self.assertTrue(with_edges["edges"])
         self.assertEqual(with_edges["page"]["returnedCount"], len(with_edges["nodes"]) + len(with_edges["boundaryNodes"]))
+
+    def test_missing_timeline_item_schema_with_live_rows_is_explicit_everywhere(self) -> None:
+        self.timeline_item_schema.unlink()
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(
+                connection,
+                "legacy-timeline-item",
+                "NIM-LEGACY",
+                "timeline-item",
+                {"title": "Legacy timeline row", "status": "in-progress"},
+            )
+            self._link(
+                connection,
+                "legacy-timeline-link",
+                "REL-LEGACY",
+                "legacy-timeline-item",
+                "prior",
+                "related",
+            )
+            connection.commit()
+
+        query = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "type", "op": "eq", "value": "timeline-item"},
+        })
+        self.assertEqual([node["id"] for node in query["nodes"]], ["legacy-timeline-item"])
+        discovery = query["watermark"]["schemaDiscovery"]
+        self.assertEqual(discovery["state"], "missing-with-live-rows")
+        self.assertEqual(discovery["liveRowCount"], 1)
+        self.assertFalse(discovery["registered"])
+        self.assertFalse(discovery["repair"]["automaticMutation"])
+        self.assertEqual(
+            discovery["repair"]["targetRelativePath"],
+            ".nimbalyst/trackers/timeline-item.yaml",
+        )
+
+        traversal = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["NIM-LEGACY"],
+        })
+        snapshot = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 500,
+        })
+        for result in (query, traversal):
+            self.assertIn(
+                "timeline-item-schema-missing-with-live-rows",
+                {finding["code"] for finding in result["validation"]["findings"]},
+            )
+        self.assertIn(
+            "timeline-item-schema-missing-with-live-rows",
+            {finding["code"] for finding in snapshot["validation"]},
+        )
+        self.assertIn(
+            "legacy-timeline-item",
+            {item["id"] for item in snapshot["items"]},
+        )
+        self.assertEqual(
+            snapshot["source"]["schemaDiscovery"]["state"],
+            "missing-with-live-rows",
+        )
+        self.assertEqual(
+            snapshot["source"]["schemaDiscovery"]["projectedRowCount"],
+            1,
+        )
+        self.assertTrue(
+            snapshot["source"]["schemaDiscovery"]["allLiveRowsProjected"],
+        )
+        self.assertNotIn(self.workspace, json.dumps({
+            "query": query["watermark"]["schemaDiscovery"],
+            "traversal": traversal["watermark"]["schemaDiscovery"],
+            "snapshot": snapshot["source"]["schemaDiscovery"],
+        }))
+
+    def test_response_trimming_prioritizes_missing_schema_legacy_rows(self) -> None:
+        result = {
+            "items": [
+                {
+                    "id": "ordinary",
+                    "primaryType": "task",
+                    "title": "Large ordinary row",
+                    "payload": "x" * 10_000,
+                },
+                {
+                    "id": "legacy",
+                    "primaryType": "timeline-item",
+                    "title": "Legacy timeline row",
+                },
+            ],
+            "milestones": [],
+            "relationships": [],
+            "validation": [],
+            "criticalPath": {"itemIds": [], "cycleItemIds": []},
+            "page": {"returned": 2, "responseTruncated": False},
+            "source": {
+                "schemaDiscovery": {
+                    "trackerType": "timeline-item",
+                    "state": "missing-with-live-rows",
+                    "registered": False,
+                    "liveRowCount": 1,
+                },
+            },
+        }
+        with patch("reader.database.MAX_RESULT_BYTES", 2_500):
+            trimmed = self.reader._fit_timeline_result(result)
+        self.assertEqual([item["id"] for item in trimmed["items"]], ["legacy"])
+        self.assertTrue(trimmed["page"]["responseTruncated"])
+        self.assertEqual(
+            trimmed["source"]["schemaDiscovery"]["projectedRowCount"],
+            1,
+        )
+        self.assertTrue(
+            trimmed["source"]["schemaDiscovery"]["allLiveRowsProjected"],
+        )
 
     def test_query_clause_depth_cap_is_enforced(self) -> None:
         clause: dict[str, object] = {"field": "status", "op": "eq", "value": "open"}

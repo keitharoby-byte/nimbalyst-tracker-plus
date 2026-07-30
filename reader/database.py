@@ -126,6 +126,9 @@ class NativeTrackerReader:
         try:
             with self._connect() as connection:
                 fingerprint = self._validate_schema(connection)
+                schema_discovery = self._schema_discovery(
+                    parsed["workspacePath"], connection
+                )
                 raw_link_rows = connection.execute(
                     """
                     SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
@@ -166,6 +169,7 @@ class NativeTrackerReader:
                               AND (
                                 id IN ({placeholders})
                                 OR (type = 'milestone' AND archived = 0)
+                                OR (type = 'timeline-item' AND archived = 0)
                               )
                             ORDER BY updated DESC, id ASC
                             LIMIT ?
@@ -184,7 +188,7 @@ class NativeTrackerReader:
                             WHERE workspace = ?
                               AND deleted_at IS NULL
                               AND archived = 0
-                              AND type = 'milestone'
+                              AND type IN ('milestone', 'timeline-item')
                             ORDER BY updated DESC, id ASC
                             LIMIT ?
                             """,
@@ -251,6 +255,7 @@ class NativeTrackerReader:
         critical_path, analysis_findings = self._apply_timeline_analysis(items, edges)
         validation = [
             *self._registry_findings(),
+            *self._schema_discovery_findings(schema_discovery),
             *relationship_findings,
             *analysis_findings,
             *self._launch_findings(items, edges),
@@ -260,7 +265,7 @@ class NativeTrackerReader:
         for edge in edges:
             edge["targetInSnapshot"] = edge["targetId"] in item_ids
 
-        source = self._source(fingerprint)
+        source = self._source(fingerprint, schema_discovery)
         source["projectStateRevision"] = project_state_revision or "unavailable"
         source["relationshipSource"] = (
             "native timeline-link rows" if link_rows else "legacy tracker fields"
@@ -336,7 +341,11 @@ class NativeTrackerReader:
         critical_path, analysis_findings = self._apply_timeline_analysis(items, edges)
         validation = [*graph["validation"]["findings"], *analysis_findings, *self._validate_timeline(items, edges)]
         watermark = graph["watermark"]
-        source = self._source(watermark["schemaFingerprint"])
+        schema_discovery = watermark.get("schemaDiscovery")
+        source = self._source(
+            watermark["schemaFingerprint"],
+            schema_discovery if isinstance(schema_discovery, Mapping) else None,
+        )
         source.update({
             "projectStateRevision": "unavailable",
             "relationshipSource": "native timeline-link rows",
@@ -411,6 +420,9 @@ class NativeTrackerReader:
         try:
             with self._connect() as connection:
                 fingerprint = self._validate_schema(connection)
+                schema_discovery = self._schema_discovery(
+                    workspace_path, connection
+                )
                 source_counts = connection.execute(
                     "SELECT COUNT(*), SUM(CASE WHEN type='timeline-link' THEN 1 ELSE 0 END) FROM tracker_items WHERE workspace=? AND deleted_at IS NULL",
                     (workspace_path,),
@@ -490,7 +502,13 @@ class NativeTrackerReader:
             if node["id"] in rollups:
                 node["launchRollup"] = rollups[node["id"]]
                 node["progress"] = rollups[node["id"]]["derivedProgress"]
-        findings = [*self._registry_findings(), *edge_findings, *validation_edge_findings, *self._launch_findings(validation_items, validation_edges)]
+        findings = [
+            *self._registry_findings(),
+            *self._schema_discovery_findings(schema_discovery),
+            *edge_findings,
+            *validation_edge_findings,
+            *self._launch_findings(validation_items, validation_edges),
+        ]
         result = {
             "nodes": nodes,
             "edges": sorted(edges, key=lambda edge: edge["id"]),
@@ -507,6 +525,7 @@ class NativeTrackerReader:
                 int(source_counts[0] or 0),
                 int(source_counts[1] or 0),
                 started,
+                schema_discovery,
             ),
             "query": {
                 **query_echo,
@@ -560,6 +579,9 @@ class NativeTrackerReader:
         try:
             with self._connect() as connection:
                 fingerprint = self._validate_schema(connection)
+                schema_discovery = self._schema_discovery(
+                    workspace_path, connection
+                )
                 rows = connection.execute(
                     "SELECT id, issue_key, type, data, content, archived, type_tags, created, updated FROM tracker_items WHERE workspace=? AND deleted_at IS NULL ORDER BY id ASC",
                     (workspace_path,),
@@ -678,7 +700,11 @@ class NativeTrackerReader:
             }
         kept_ids = set(resolved_roots) | kept_member_ids | boundary_ids
         candidate_edges = [edge for edge in edges if edge["id"] in selected_edge_ids]
-        findings = [*self._registry_findings(), *normalization_findings]
+        findings = [
+            *self._registry_findings(),
+            *self._schema_discovery_findings(schema_discovery),
+            *normalization_findings,
+        ]
         tolerated_archived_ids: set[str] = set()
         for edge in candidate_edges:
             for endpoint in (edge["sourceId"], edge["targetId"]):
@@ -722,7 +748,13 @@ class NativeTrackerReader:
             "boundaryNodes": boundary_nodes,
             "page": {"totalCount": len(kept_ids), "returnedCount": len(nodes) + len(boundary_nodes), "nextCursor": None, "truncated": truncated},
             "validation": validation,
-            "watermark": self._watermark(fingerprint, len(item_rows), len(link_db_rows), started),
+            "watermark": self._watermark(
+                fingerprint,
+                len(item_rows),
+                len(link_db_rows),
+                started,
+                schema_discovery,
+            ),
             "query": {**query_echo, "roots": roots, "resolvedRoots": resolved_roots, "membership": membership, "expand": expand, "nodeWhere": node_where},
         }
         return self._fit_graph_result(result)
@@ -2045,8 +2077,37 @@ class NativeTrackerReader:
         return result
 
     def _fit_timeline_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        schema_discovery = result.get("source", {}).get("schemaDiscovery")
+        protect_legacy_rows = (
+            isinstance(schema_discovery, dict)
+            and schema_discovery.get("state") == "missing-with-live-rows"
+        )
+
+        def update_projection_count() -> None:
+            if not isinstance(schema_discovery, dict):
+                return
+            projected_count = sum(
+                item.get("primaryType") == "timeline-item"
+                for item in result["items"]
+            )
+            schema_discovery["projectedRowCount"] = projected_count
+            schema_discovery["allLiveRowsProjected"] = (
+                projected_count == int(schema_discovery.get("liveRowCount") or 0)
+            )
+
+        update_projection_count()
         while result["items"] and self._json_size(result) > MAX_RESULT_BYTES:
-            result["items"].pop()
+            removable_index = len(result["items"]) - 1
+            if protect_legacy_rows:
+                removable_index = next(
+                    (
+                        index
+                        for index in range(len(result["items"]) - 1, -1, -1)
+                        if result["items"][index].get("primaryType") != "timeline-item"
+                    ),
+                    removable_index,
+                )
+            result["items"].pop(removable_index)
             retained = {item["id"] for item in result["items"]}
             result["milestones"] = [item for item in result["milestones"] if item["id"] in retained]
             result["relationships"] = [
@@ -2067,6 +2128,7 @@ class NativeTrackerReader:
             ]
             result["page"]["returned"] = len(result["items"])
             result["page"]["responseTruncated"] = True
+            update_projection_count()
         if self._json_size(result) > MAX_RESULT_BYTES:
             raise ReaderError("RESPONSE_TOO_LARGE", "The timeline cannot fit within the safe response limit.")
         return result
@@ -2227,8 +2289,12 @@ class NativeTrackerReader:
             "archived": bool(row["archived"]),
         }
 
-    def _source(self, schema_fingerprint: str) -> dict[str, Any]:
-        return {
+    def _source(
+        self,
+        schema_fingerprint: str,
+        schema_discovery: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        source = {
             "backend": "sqlite",
             "mode": "read-only",
             "schemaAdapter": SCHEMA_ADAPTER,
@@ -2237,11 +2303,121 @@ class NativeTrackerReader:
             "registryOverrideActive": self._registry_override_active,
             "registryHash": self._registry_hash,
         }
+        if schema_discovery is not None:
+            source["schemaDiscovery"] = dict(schema_discovery)
+        return source
 
     def _registry_findings(self) -> list[dict[str, Any]]:
         if not self._registry_override_error:
             return []
         return [self._finding("registry-override-invalid", "warning", self._registry_override_error)]
+
+    def _schema_discovery(
+        self,
+        workspace_path: str,
+        connection: sqlite3.Connection,
+    ) -> dict[str, Any]:
+        tracker_type = "timeline-item"
+        live_row = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM tracker_items
+            WHERE workspace = ?
+              AND deleted_at IS NULL
+              AND archived = 0
+              AND type = ?
+            """,
+            (workspace_path, tracker_type),
+        ).fetchone()
+        live_row_count = int(live_row[0] or 0) if live_row is not None else 0
+        registered_schema_path = self._registered_tracker_schema(
+            workspace_path, tracker_type
+        )
+        registered = registered_schema_path is not None
+        state = (
+            "registered"
+            if registered
+            else "missing-with-live-rows"
+            if live_row_count
+            else "not-registered-no-live-rows"
+        )
+        discovery: dict[str, Any] = {
+            "trackerType": tracker_type,
+            "state": state,
+            "registered": registered,
+            "liveRowCount": live_row_count,
+            "registryDirectory": ".nimbalyst/trackers",
+            "registeredSchemaPath": registered_schema_path,
+        }
+        if state == "missing-with-live-rows":
+            discovery["repair"] = {
+                "mode": "manual-preview-required",
+                "automaticMutation": False,
+                "templateId": "tracker-plus/timeline-item-v2",
+                "targetRelativePath": ".nimbalyst/trackers/timeline-item.yaml",
+                "instruction": (
+                    "Review the bundled Tracker+ timeline-item schema template, "
+                    "then register it explicitly through Nimbalyst or a reviewed "
+                    "workspace change."
+                ),
+            }
+        return discovery
+
+    @staticmethod
+    def _registered_tracker_schema(
+        workspace_path: str,
+        tracker_type: str,
+    ) -> str | None:
+        schema_directory = Path(workspace_path) / ".nimbalyst" / "trackers"
+        try:
+            candidates = sorted(
+                (
+                    path
+                    for path in schema_directory.iterdir()
+                    if path.is_file()
+                    and path.name.lower().endswith((".yaml", ".yml"))
+                ),
+                key=lambda path: path.name.lower(),
+            )[:256]
+        except OSError:
+            return None
+
+        type_pattern = re.compile(
+            r"^\s*type\s*:\s*['\"]?([^'\"#\s]+)['\"]?\s*(?:#.*)?$",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        for candidate in candidates:
+            try:
+                with candidate.open("r", encoding="utf-8") as handle:
+                    preview = handle.read(16_384)
+            except (OSError, UnicodeError):
+                continue
+            match = type_pattern.search(preview)
+            if match and match.group(1).lower() == tracker_type.lower():
+                return f".nimbalyst/trackers/{candidate.name}"
+        return None
+
+    def _schema_discovery_findings(
+        self,
+        schema_discovery: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        if schema_discovery.get("state") != "missing-with-live-rows":
+            return []
+        live_row_count = int(schema_discovery.get("liveRowCount") or 0)
+        noun = "row" if live_row_count == 1 else "rows"
+        return [
+            self._finding(
+                "timeline-item-schema-missing-with-live-rows",
+                "warning",
+                (
+                    f"The workspace has {live_row_count} live legacy timeline-item "
+                    f"{noun}, but no timeline-item schema is registered in "
+                    ".nimbalyst/trackers. Tracker+ preserved the rows. Review the "
+                    "bundled schema template before registering it manually; "
+                    "Tracker+ will not mutate tracker data or schema files."
+                ),
+            )
+        ]
 
     @staticmethod
     def _validation_block(findings: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2254,8 +2430,15 @@ class NativeTrackerReader:
             "cycleCount": sum(item.get("code") == "membership-cycle" for item in findings),
         }
 
-    def _watermark(self, fingerprint: str, item_count: int, relationship_count: int, started: float) -> dict[str, Any]:
-        return {
+    def _watermark(
+        self,
+        fingerprint: str,
+        item_count: int,
+        relationship_count: int,
+        started: float,
+        schema_discovery: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        watermark = {
             "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "schemaAdapter": SCHEMA_ADAPTER,
             "schemaFingerprint": fingerprint,
@@ -2266,6 +2449,9 @@ class NativeTrackerReader:
             "sourceRelationshipCount": relationship_count,
             "durationMs": round((time.perf_counter() - started) * 1000, 2),
         }
+        if schema_discovery is not None:
+            watermark["schemaDiscovery"] = dict(schema_discovery)
+        return watermark
 
     def _fit_graph_result(self, result: dict[str, Any], sort: list[dict[str, str]] | None = None) -> dict[str, Any]:
         removed = False

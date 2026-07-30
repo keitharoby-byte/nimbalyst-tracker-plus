@@ -16,6 +16,22 @@ The host's tracker schema changed. Record the host version and reported missing
 columns/fingerprint, then update the adapter and synthetic fixtures before
 reading production comments again.
 
+## `timeline-item-schema-missing-with-live-rows`
+
+Nimbalyst 0.71.3 scopes tracker-type definitions to the project that registered
+them. If a workspace still has live legacy `timeline-item` database rows but
+does not contain a matching schema in `.nimbalyst/trackers`, native type
+discovery can omit the type even though direct reads still succeed.
+
+Tracker+ preserves and counts the rows and returns a `schemaDiscovery`
+descriptor in query/traversal watermarks and timeline projection sources. Its
+repair block is intentionally `manual-preview-required` and
+`automaticMutation: false`. Review the bundled
+`dist/reader/timeline-item.schema.yaml` template against the workspace, then
+register `.nimbalyst/trackers/timeline-item.yaml` explicitly through Nimbalyst
+or a reviewed workspace change. Tracker+ never writes tracker data or schema
+registry files.
+
 ## `TRACKER_NOT_FOUND`
 
 The id or issue key does not resolve inside the current workspace. The same

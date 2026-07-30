@@ -165,6 +165,9 @@ export function TrackerTimeline({ host }: EditorHostProps) {
   const launchSelection = launchFilterSelection(snapshot, document.filters.launch);
   const launchOptions = snapshot.items.filter((item) => item.primaryType === 'launch');
   const validationState = errors > 0 ? 'fail' : snapshot.validation.length > 0 ? 'warn' : 'pass';
+  const missingSchema = snapshot.source.schemaDiscovery?.state === 'missing-with-live-rows'
+    ? snapshot.source.schemaDiscovery
+    : null;
 
   return (
     <div className="nt-shell" data-theme={theme}>
@@ -239,6 +242,12 @@ export function TrackerTimeline({ host }: EditorHostProps) {
         <span className="nt-disclosure">Members <strong>{launchSelection.memberIds.size}</strong></span>
         <span className="nt-disclosure">Boundary <strong>{launchSelection.boundaryIds.size}</strong></span>
         <span className={`nt-disclosure state-${validationState}`}>Validation <strong>{validationState}</strong></span>
+        {missingSchema && (
+          <span className="nt-warning">
+            timeline-item schema missing; {missingSchema.projectedRowCount ?? missingSchema.liveRowCount}/{missingSchema.liveRowCount} legacy {missingSchema.liveRowCount === 1 ? 'row' : 'rows'} projected.
+            Review and manually register the bundled template.
+          </span>
+        )}
         {truncated && <span className="nt-warning">Snapshot is bounded; refine filters to see all items.</span>}
       </div>
 
@@ -308,10 +317,12 @@ function Watermark({ document }: { document: TimelineDocument }) {
   const source = document.snapshot.source;
   const fingerprint = typeof source.schemaFingerprint === 'string' ? source.schemaFingerprint.slice(0, 12) : 'unavailable';
   const revision = typeof source.projectStateRevision === 'string' ? source.projectStateRevision : 'unavailable';
+  const schemaState = source.schemaDiscovery?.state ?? 'unavailable';
   return (
     <div className="nt-watermark" aria-label="Projection provenance">
       <span>Snapshot <strong>{document.snapshot.generatedAt ? formatDateTime(document.snapshot.generatedAt) : 'not synced'}</strong></span>
       <span>Schema <code>{fingerprint}</code></span>
+      <span>timeline-item <code>{schemaState}</code></span>
       <span>ProjectState <code>{revision}</code></span>
       <span>Projection v{document.version}</span>
     </div>

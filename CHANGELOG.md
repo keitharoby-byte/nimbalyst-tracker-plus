@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.4.2 - 2026-07-30
+
+- Keep `page.returnedCount` commensurable with item totals by excluding
+  relationship edges while still counting traversal boundary nodes.
+- Detect live legacy `timeline-item` rows when the current workspace has no
+  registered schema, preserve those rows, and surface a structured
+  `timeline-item-schema-missing-with-live-rows` warning plus manual,
+  preview-required repair metadata in query, traversal, projection, and UI
+  receipts.
+- Package the reviewed `timeline-item` schema template without adding an
+  automatic tracker, database, or workspace-schema mutation path.
+- Validate Tracker+ against Nimbalyst 0.71.3 and update the pinned Extension
+  SDK from 0.2.2 to 0.3.0.
+
 ## 0.4.1 - 2026-07-17
 
 - Split the six MCP tools into a four-tool read/query backend and a two-tool

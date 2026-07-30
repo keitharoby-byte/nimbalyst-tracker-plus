@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.4.1 is Windows-first and was validated with Nimbalyst 0.68.1. Because
+Version 0.4.2 is Windows-first and was validated with Nimbalyst 0.71.3. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID,
@@ -22,7 +22,18 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ in the Midnight Orchid extension theme">
 </p>
 
-## What's new in 0.4.1
+## What's new in 0.4.2
+
+- Keep cursor-page item counts independent from normalized relationship-edge
+  counts.
+- Detect a missing workspace `timeline-item` schema when live legacy rows
+  remain, preserve and count those rows, and expose the same structured warning
+  in query, traversal, projection, and custom-editor receipts.
+- Provide a bundled schema template and manual, preview-required repair
+  guidance without automatically mutating tracker data or workspace schemas.
+- Validate the extension against Nimbalyst 0.71.3 and Extension SDK 0.3.0.
+
+## Previously in 0.4.1
 
 - Register all six tools through separate read/query and projection backends,
   avoiding the Nimbalyst 0.68.1 four-tool registration ceiling.
@@ -149,6 +160,14 @@ All tools take their workspace from the Nimbalyst backend context. Callers
 cannot choose a database path or SQL statement. Durable tracker changes still
 go through Nimbalyst's built-in `tracker_create`, `tracker_update`, and
 `tracker_add_comment` tools.
+
+Query and traversal watermarks and timeline projection sources include a
+`schemaDiscovery` descriptor for `timeline-item`. If its state is
+`missing-with-live-rows`, Tracker+ continues to return those legacy rows and
+adds the warning code `timeline-item-schema-missing-with-live-rows`. Review the
+bundled schema template before manually registering
+`.nimbalyst/trackers/timeline-item.yaml`; Tracker+ never performs that repair
+automatically.
 
 ## Quick start
 
