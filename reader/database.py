@@ -25,6 +25,10 @@ try:
         MAX_REPORT_LOOKAHEAD_DAYS,
         MAX_RESULT_BYTES,
         MAX_TIMELINE_ITEMS,
+        MAX_TIMELINE_SELECTOR_SOURCE_ITEMS,
+        MAX_TIMELINE_SELECTOR_SOURCE_RELATIONSHIPS,
+        MAX_TIMELINE_SELECTOR_TAG_CHARS,
+        MAX_TIMELINE_SELECTOR_TAGS,
         MAX_TRACKER_BODY_CHARS,
         REQUIRED_COLUMNS,
         SCHEMA_ADAPTER,
@@ -43,6 +47,10 @@ except ImportError:  # pragma: no cover - used when server.py runs as a script
         MAX_REPORT_LOOKAHEAD_DAYS,
         MAX_RESULT_BYTES,
         MAX_TIMELINE_ITEMS,
+        MAX_TIMELINE_SELECTOR_SOURCE_ITEMS,
+        MAX_TIMELINE_SELECTOR_SOURCE_RELATIONSHIPS,
+        MAX_TIMELINE_SELECTOR_TAG_CHARS,
+        MAX_TIMELINE_SELECTOR_TAGS,
         MAX_TRACKER_BODY_CHARS,
         REQUIRED_COLUMNS,
         SCHEMA_ADAPTER,
@@ -120,6 +128,8 @@ class NativeTrackerReader:
     def timeline_snapshot(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_timeline_params(params)
         self._load_registry(parsed["workspacePath"])
+        if parsed.get("selector"):
+            return self._tag_seeded_timeline_snapshot(parsed)
         if parsed.get("launch"):
             return self._launch_timeline_snapshot(parsed)
         link_rows: list[tuple[sqlite3.Row, dict[str, Any]]] = []
@@ -311,6 +321,277 @@ class NativeTrackerReader:
             "source": source,
         }
         return self._fit_timeline_result(result)
+
+    def _tag_seeded_timeline_snapshot(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
+        """Build a complete tag-seeded projection with one-hop boundary closure."""
+        selector = parsed["selector"]
+        launch_tags = list(selector["launchTags"])
+        started = time.perf_counter()
+        try:
+            with self._connect() as connection:
+                fingerprint = self._validate_schema(connection)
+                schema_discovery = self._schema_discovery(parsed["workspacePath"], connection)
+                item_rows = connection.execute(
+                    """
+                    SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
+                    FROM tracker_items
+                    WHERE workspace = ?
+                      AND deleted_at IS NULL
+                      AND type <> 'timeline-link'
+                    ORDER BY id ASC
+                    LIMIT ?
+                    """,
+                    (parsed["workspacePath"], MAX_TIMELINE_SELECTOR_SOURCE_ITEMS + 1),
+                ).fetchall()
+                link_db_rows = connection.execute(
+                    """
+                    SELECT id, issue_key, type, data, content, archived, type_tags, created, updated
+                    FROM tracker_items
+                    WHERE workspace = ?
+                      AND deleted_at IS NULL
+                      AND type = 'timeline-link'
+                    ORDER BY id ASC
+                    LIMIT ?
+                    """,
+                    (parsed["workspacePath"], MAX_TIMELINE_SELECTOR_SOURCE_RELATIONSHIPS + 1),
+                ).fetchall()
+        except ReaderError:
+            raise
+        except sqlite3.OperationalError as error:
+            message = str(error).lower()
+            if "locked" in message or "busy" in message:
+                raise ReaderError("DATABASE_BUSY", "The Nimbalyst tracker database is busy. Retry the read shortly.") from None
+            raise ReaderError("DATABASE_READ_FAILED", "The Nimbalyst tracker database could not be read safely.") from None
+
+        if len(item_rows) > MAX_TIMELINE_SELECTOR_SOURCE_ITEMS or len(link_db_rows) > MAX_TIMELINE_SELECTOR_SOURCE_RELATIONSHIPS:
+            raise ReaderError(
+                "SOURCE_LIMIT_EXCEEDED",
+                "The tag selector source exceeded its safe scan limit; no timeline file was replaced.",
+                {
+                    "itemLimit": MAX_TIMELINE_SELECTOR_SOURCE_ITEMS,
+                    "relationshipLimit": MAX_TIMELINE_SELECTOR_SOURCE_RELATIONSHIPS,
+                },
+            )
+
+        all_items: list[dict[str, Any]] = []
+        raw_fields_by_id: dict[str, dict[str, Any]] = {}
+        row_by_id: dict[str, sqlite3.Row] = {}
+        for row in item_rows:
+            fields = self._flatten_custom_fields(self._parse_data(row))
+            item = self._timeline_item(row, fields)
+            item["archived"] = bool(row["archived"])
+            all_items.append(item)
+            raw_fields_by_id[item["id"]] = fields
+            row_by_id[item["id"]] = row
+        items_by_id = {item["id"]: item for item in all_items}
+        tag_set = set(launch_tags)
+        seed_ids = {
+            item["id"]
+            for item in all_items
+            if not item.get("archived")
+            and tag_set.intersection(str(tag).strip().casefold() for tag in item.get("tags", []))
+            and (parsed["includeUnscheduled"] or self._is_scheduled(item))
+            and self._in_timeline_range(item, parsed.get("fromMs"), parsed.get("toMs"))
+        }
+        if not seed_ids:
+            raise ReaderError(
+                "SELECTOR_NO_MATCH",
+                "No active tracker items matched selector.launchTags; no timeline file was replaced.",
+                {"selector": {"type": "launchTags", "launchTags": launch_tags}},
+            )
+
+        link_rows = [
+            (row, self._flatten_custom_fields(self._parse_data(row)))
+            for row in link_db_rows
+        ]
+        candidate_link_ids: set[str] = set()
+        for row, fields in link_rows:
+            if (self._bounded_string(fields.get("status"), 40) or "active") != "active":
+                continue
+            endpoint_ids = {
+                target["itemId"]
+                for field_name in ("sourceItem", "targetItem")
+                for target in self._relationship_targets(fields.get(field_name))
+            }
+            if endpoint_ids.intersection(seed_ids):
+                candidate_link_ids.add(str(row["id"]))
+
+        edges, normalization_findings = self._normalized_relationships(
+            all_items, raw_fields_by_id, link_rows
+        )
+        candidate_edges = [
+            edge for edge in edges
+            if edge["id"] in candidate_link_ids and edge.get("state") == "active"
+        ]
+        closure_ids = set(seed_ids)
+        for edge in candidate_edges:
+            closure_ids.update((edge["sourceId"], edge["targetId"]))
+
+        relevant_findings = [
+            finding for finding in normalization_findings
+            if candidate_link_ids.intersection(finding.get("relationshipIds", []))
+        ]
+        missing_endpoint_ids: set[str] = set()
+        tolerated_archived_ids: set[str] = set()
+        for edge in candidate_edges:
+            for endpoint in (edge["sourceId"], edge["targetId"]):
+                item = items_by_id.get(endpoint)
+                tolerated = bool(
+                    item
+                    and item.get("archived")
+                    and edge.get("relationshipType") == "evidences"
+                    and edge.get("effectiveRevision")
+                )
+                if tolerated:
+                    tolerated_archived_ids.add(endpoint)
+                if item is None or (item.get("archived") and not tolerated):
+                    missing_endpoint_ids.add(endpoint)
+                    relevant_findings.append(self._finding(
+                        "orphan-endpoint",
+                        "error",
+                        f"Relationship {edge.get('issueKey') or edge['id']} has an unavailable endpoint.",
+                        item_ids=[endpoint],
+                        relationship_ids=[edge["id"]],
+                    ))
+
+        if missing_endpoint_ids:
+            raise ReaderError(
+                "VALIDATION_FAILED",
+                "The selected relationship closure has unavailable endpoints; no timeline file was replaced.",
+                {"missingEndpointIds": sorted(missing_endpoint_ids)},
+            )
+        if len(closure_ids) > parsed["maxItems"]:
+            raise ReaderError(
+                "RESULT_LIMIT_EXCEEDED",
+                "The complete selected relationship closure exceeds maxItems; no timeline file was replaced.",
+                {"discoveredItems": len(closure_ids), "maxItems": parsed["maxItems"]},
+            )
+        max_edges = min(self._registry["caps"]["traverseEdgesMax"], parsed["maxItems"] * 2)
+        if len(candidate_edges) > max_edges:
+            raise ReaderError(
+                "RESULT_LIMIT_EXCEEDED",
+                "The complete selected relationship closure exceeds the relationship cap; no timeline file was replaced.",
+                {"discoveredRelationships": len(candidate_edges), "maxRelationships": max_edges},
+            )
+
+        boundary_ids = closure_ids - seed_ids
+        items = [items_by_id[item_id] for item_id in sorted(closure_ids)]
+        for item in items:
+            item["boundary"] = item["id"] in boundary_ids
+            item["selectorSeed"] = item["id"] in seed_ids
+        selected_edges = sorted(candidate_edges, key=lambda edge: edge["id"])
+        self._apply_derived_milestone_progress(items, selected_edges)
+        self._apply_launch_rollups(items, selected_edges)
+        critical_path, analysis_findings = self._apply_timeline_analysis(items, selected_edges)
+        validation = [
+            *self._registry_findings(),
+            *self._schema_discovery_findings(schema_discovery),
+            *relevant_findings,
+            *analysis_findings,
+            *self._launch_findings(items, selected_edges),
+            *self._validate_timeline(items, selected_edges),
+        ]
+        validation_block = self._validation_block(validation)
+        if validation_block["state"] == "fail":
+            raise ReaderError(
+                "VALIDATION_FAILED",
+                "The selected timeline failed validation; no timeline file was replaced.",
+                {"validation": validation_block},
+            )
+
+        project_state_revision: str | None = None
+        for item_id in sorted(closure_ids):
+            project_state_revision = project_state_revision or self._bounded_string(
+                raw_fields_by_id[item_id].get("projectStateRevision"), 200
+            )
+        link_fields_by_id = {str(row["id"]): fields for row, fields in link_rows}
+        for edge in selected_edges:
+            project_state_revision = project_state_revision or self._bounded_string(
+                link_fields_by_id[edge["id"]].get("projectStateRevision"), 200
+            )
+        for item in items:
+            item.pop("archived", None)
+            for key in [entry for entry in item if entry.startswith("_")]:
+                item.pop(key, None)
+
+        semantic_projection = {
+            "selector": {"type": "launchTags", "launchTags": launch_tags},
+            "items": items,
+            "relationships": selected_edges,
+            "criticalPath": critical_path,
+            "schemaAdapter": SCHEMA_ADAPTER,
+            "schemaFingerprint": fingerprint,
+            "registryVersion": self._registry["version"],
+            "registryHash": self._registry_hash,
+            "projectStateRevision": project_state_revision or "unavailable",
+        }
+        output_hash = hashlib.sha256(
+            json.dumps(semantic_projection, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        source = self._source(fingerprint, schema_discovery)
+        source.update({
+            "projectStateRevision": project_state_revision or "unavailable",
+            "relationshipSource": "native timeline-link rows",
+            "relationshipRows": len(link_db_rows),
+            "sourceItemCount": len(item_rows),
+            "sourceRelationshipCount": len(link_db_rows),
+            "endpointItems": len(items),
+            "milestoneRows": sum(item.get("primaryType") == "milestone" for item in items),
+            "selector": {
+                "type": "launchTags",
+                "launchTags": launch_tags,
+                "seedCount": len(seed_ids),
+                "seedIds": sorted(seed_ids),
+            },
+            "closure": {
+                "strategy": "active-one-hop-boundary",
+                "seedCount": len(seed_ids),
+                "boundaryCount": len(boundary_ids),
+                "itemCount": len(items),
+                "relationshipCount": len(selected_edges),
+            },
+            "emitted": {
+                "itemCount": len(items),
+                "relationshipCount": len(selected_edges),
+                "milestoneCount": sum(item.get("primaryType") == "milestone" for item in items),
+            },
+            "validationCounts": {
+                "total": len(validation),
+                "error": sum(finding.get("severity") == "error" for finding in validation),
+                "warning": sum(finding.get("severity") == "warning" for finding in validation),
+                "info": sum(finding.get("severity") == "info" for finding in validation),
+            },
+            "truncation": {"source": False, "cap": False, "response": False},
+            "generatedAt": generated_at,
+            "generationId": f"tag-selector:{output_hash}",
+            "outputHash": output_hash,
+        })
+        result = {
+            "generatedAt": generated_at,
+            "items": items,
+            "milestones": [
+                item for item in items
+                if item.get("primaryType") == "milestone" and not item.get("boundary")
+            ],
+            "relationships": selected_edges,
+            "validation": validation,
+            "criticalPath": critical_path,
+            "page": {
+                "maxItems": parsed["maxItems"],
+                "returned": len(items),
+                "queryTruncated": False,
+                "responseTruncated": False,
+            },
+            "source": source,
+        }
+        fitted = self._fit_timeline_result(result)
+        if fitted["page"]["responseTruncated"]:
+            raise ReaderError(
+                "RESPONSE_TOO_LARGE",
+                "The complete selected timeline exceeded the safe response size; no timeline file was replaced.",
+            )
+        return fitted
 
     def _launch_timeline_snapshot(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
         relationship_types = [
@@ -927,7 +1208,7 @@ class NativeTrackerReader:
         }
 
     def _validated_timeline_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        allowed = {"workspacePath", "includeUnscheduled", "maxItems", "from", "to", "launch"}
+        allowed = {"workspacePath", "includeUnscheduled", "maxItems", "from", "to", "launch", "selector"}
         unknown = sorted(set(params) - allowed)
         if unknown:
             raise ReaderError("INVALID_PARAMS", f"Unknown parameter(s): {', '.join(unknown)}.")
@@ -949,6 +1230,24 @@ class NativeTrackerReader:
         launch = params.get("launch")
         if launch is not None and (not isinstance(launch, str) or not launch.strip() or len(launch.strip()) > 100):
             raise ReaderError("INVALID_PARAMS", "launch must be a non-empty key of at most 100 characters.")
+        selector = params.get("selector")
+        if launch is not None and selector is not None:
+            raise ReaderError("INVALID_PARAMS", "launch and selector cannot be combined.")
+        normalized_selector: dict[str, Any] | None = None
+        if selector is not None:
+            if not isinstance(selector, Mapping) or set(selector) != {"launchTags"}:
+                raise ReaderError("INVALID_PARAMS", "selector must contain only launchTags.")
+            launch_tags = selector.get("launchTags")
+            if not isinstance(launch_tags, list) or not 1 <= len(launch_tags) <= MAX_TIMELINE_SELECTOR_TAGS:
+                raise ReaderError("INVALID_PARAMS", f"selector.launchTags must contain 1 through {MAX_TIMELINE_SELECTOR_TAGS} tags.")
+            normalized_tags: list[str] = []
+            for tag in launch_tags:
+                if not isinstance(tag, str) or not tag.strip() or len(tag.strip()) > MAX_TIMELINE_SELECTOR_TAG_CHARS:
+                    raise ReaderError("INVALID_PARAMS", f"selector.launchTags values must be non-empty strings of at most {MAX_TIMELINE_SELECTOR_TAG_CHARS} characters.")
+                normalized_tags.append(tag.strip().casefold())
+            if len(set(normalized_tags)) != len(normalized_tags):
+                raise ReaderError("INVALID_PARAMS", "selector.launchTags must be unique after normalization.")
+            normalized_selector = {"launchTags": sorted(normalized_tags)}
         return {
             "workspacePath": workspace_path,
             "includeUnscheduled": include_unscheduled,
@@ -956,6 +1255,7 @@ class NativeTrackerReader:
             "fromMs": from_ms,
             "toMs": to_ms,
             "launch": launch.strip() if isinstance(launch, str) else None,
+            "selector": normalized_selector,
         }
 
     def _validated_report_params(self, params: Mapping[str, Any]) -> dict[str, Any]:

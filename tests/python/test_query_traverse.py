@@ -38,9 +38,14 @@ class QueryTraverseTests(unittest.TestCase):
             self._insert(connection, "member-1", "NIM-1550", "task", {"title": "Core work", "status": "in-progress", "owner": "pm", "tags": ["ffp-1"]})
             self._insert(connection, "member-2", "NIM-1551", "task", {"title": "Review work", "status": "done", "owner": "engineer"})
             self._insert(connection, "prior", "M-ALPHA", "milestone", {"title": "Prior launch", "status": "active", "targetDate": "2026-07-01"})
+            self._insert(connection, "alpha-seed", "ALPHA-1", "task", {"title": "Alpha seed", "status": "open", "tags": ["Alpha-Launch"]})
+            self._insert(connection, "demo-seed", "DEMO-1", "task", {"title": "Demo seed", "status": "open", "tags": ["demo-launch"]})
+            self._insert(connection, "shared-evidence", "EVIDENCE-1", "document", {"title": "Shared native evidence", "status": "active"})
             self._link(connection, "link-member-1", "REL-1", "member-1", "launch-1", "part-of-launch", scope_role="core")
             self._link(connection, "link-member-2", "REL-2", "member-2", "launch-1", "part-of-launch", scope_role="review")
             self._link(connection, "link-blocker", "REL-3", "member-1", "prior", "depends-on", hardness="hard-serial")
+            self._link(connection, "link-alpha-evidence", "REL-ALPHA", "alpha-seed", "shared-evidence", "related")
+            self._link(connection, "link-demo-evidence", "REL-DEMO", "demo-seed", "shared-evidence", "related")
             for index in range(205):
                 self._insert(connection, f"page-{index:03d}", f"PAGE-{index:03d}", "task", {"title": f"Paged {index}", "status": "open", "updated": f"2026-07-16T00:{index % 60:02d}:00Z"})
             connection.commit()
@@ -124,6 +129,150 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(snapshot["source"]["rootLaunch"], "FFP-1")
         self.assertEqual(snapshot["source"]["membership"], {"memberCount": 2, "boundaryCount": 1})
         self.assertFalse(snapshot["page"]["queryTruncated"])
+
+    def test_tag_seeded_snapshots_are_independent_and_include_boundaries(self) -> None:
+        alpha = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 50,
+            "selector": {"launchTags": [" ALPHA-LAUNCH "]},
+        })
+        demo = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 50,
+            "selector": {"launchTags": ["demo-launch"]},
+        })
+
+        self.assertEqual({item["id"] for item in alpha["items"]}, {"alpha-seed", "shared-evidence"})
+        self.assertEqual({edge["id"] for edge in alpha["relationships"]}, {"link-alpha-evidence"})
+        self.assertTrue(next(item for item in alpha["items"] if item["id"] == "shared-evidence")["boundary"])
+        self.assertEqual({item["id"] for item in demo["items"]}, {"demo-seed", "shared-evidence"})
+        self.assertEqual({edge["id"] for edge in demo["relationships"]}, {"link-demo-evidence"})
+        self.assertNotEqual(alpha["source"]["outputHash"], demo["source"]["outputHash"])
+        self.assertEqual(alpha["source"]["selector"]["launchTags"], ["alpha-launch"])
+        self.assertEqual(alpha["source"]["selector"]["seedIds"], ["alpha-seed"])
+        self.assertEqual(alpha["source"]["closure"]["strategy"], "active-one-hop-boundary")
+        self.assertEqual(alpha["source"]["truncation"], {"source": False, "cap": False, "response": False})
+
+    def test_tag_seeded_multi_tag_union_and_identity_are_deterministic(self) -> None:
+        params = {
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 50,
+            "selector": {"launchTags": ["DEMO-LAUNCH", "alpha-launch"]},
+        }
+        first = self.reader.timeline_snapshot(params)
+        second = self.reader.timeline_snapshot({
+            **params,
+            "selector": {"launchTags": ["alpha-launch", "demo-launch"]},
+        })
+        self.assertEqual(first["source"]["outputHash"], second["source"]["outputHash"])
+        self.assertEqual(first["source"]["generationId"], second["source"]["generationId"])
+        self.assertEqual(first["source"]["selector"]["launchTags"], ["alpha-launch", "demo-launch"])
+        self.assertEqual(
+            {item["id"] for item in first["items"]},
+            {"alpha-seed", "demo-seed", "shared-evidence"},
+        )
+        self.assertEqual(
+            {edge["id"] for edge in first["relationships"]},
+            {"link-alpha-evidence", "link-demo-evidence"},
+        )
+
+        alpha_before = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "selector": {"launchTags": ["alpha-launch"]},
+        })["source"]["outputHash"]
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            demo_data = {"title": "Changed Demo seed", "status": "open", "tags": ["demo-launch"]}
+            connection.execute(
+                "UPDATE tracker_items SET data=? WHERE id='demo-seed'",
+                (json.dumps(demo_data),),
+            )
+            connection.commit()
+        alpha_after_demo_change = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "selector": {"launchTags": ["alpha-launch"]},
+        })["source"]["outputHash"]
+        self.assertEqual(alpha_before, alpha_after_demo_change)
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            alpha_data = {"title": "Changed Alpha seed", "status": "open", "tags": ["alpha-launch"]}
+            connection.execute(
+                "UPDATE tracker_items SET data=? WHERE id='alpha-seed'",
+                (json.dumps(alpha_data),),
+            )
+            connection.commit()
+        alpha_after_alpha_change = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "selector": {"launchTags": ["alpha-launch"]},
+        })["source"]["outputHash"]
+        self.assertNotEqual(alpha_before, alpha_after_alpha_change)
+
+    def test_tag_selector_rejects_invalid_empty_and_overflowed_projections(self) -> None:
+        invalid_params = [
+            {"selector": {"launchTags": []}},
+            {"selector": {"launchTags": ["Alpha", " alpha "]}},
+            {"selector": {"launchTags": ["alpha"], "other": True}},
+            {"selector": {"launchTags": ["alpha"]}, "launch": "FFP-1"},
+        ]
+        for extra in invalid_params:
+            with self.subTest(extra=extra), self.assertRaises(ReaderError) as raised:
+                self.reader.timeline_snapshot({"workspacePath": self.workspace, **extra})
+            self.assertEqual(raised.exception.code, "INVALID_PARAMS")
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.timeline_snapshot({
+                "workspacePath": self.workspace,
+                "selector": {"launchTags": ["missing-launch"]},
+            })
+        self.assertEqual(raised.exception.code, "SELECTOR_NO_MATCH")
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.timeline_snapshot({
+                "workspacePath": self.workspace,
+                "maxItems": 1,
+                "selector": {"launchTags": ["alpha-launch"]},
+            })
+        self.assertEqual(raised.exception.code, "RESULT_LIMIT_EXCEEDED")
+
+        with patch("reader.database.MAX_TIMELINE_SELECTOR_SOURCE_ITEMS", 1):
+            with self.assertRaises(ReaderError) as raised:
+                self.reader.timeline_snapshot({
+                    "workspacePath": self.workspace,
+                    "selector": {"launchTags": ["alpha-launch"]},
+                })
+        self.assertEqual(raised.exception.code, "SOURCE_LIMIT_EXCEEDED")
+
+        with patch("reader.database.MAX_RESULT_BYTES", 1_000):
+            with self.assertRaises(ReaderError) as raised:
+                self.reader.timeline_snapshot({
+                    "workspacePath": self.workspace,
+                    "selector": {"launchTags": ["alpha-launch"]},
+                })
+        self.assertEqual(raised.exception.code, "RESPONSE_TOO_LARGE")
+
+    def test_tag_selector_fails_on_incident_invalid_or_missing_endpoints(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._link(connection, "link-alpha-missing", "REL-MISSING", "alpha-seed", "missing-id", "related")
+            connection.commit()
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.timeline_snapshot({
+                "workspacePath": self.workspace,
+                "selector": {"launchTags": ["alpha-launch"]},
+            })
+        self.assertEqual(raised.exception.code, "VALIDATION_FAILED")
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute("DELETE FROM tracker_items WHERE id='link-alpha-missing'")
+            self._link(connection, "link-alpha-invalid", "REL-INVALID", "alpha-seed", "shared-evidence", "unknown-kind")
+            connection.commit()
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.timeline_snapshot({
+                "workspacePath": self.workspace,
+                "selector": {"launchTags": ["alpha-launch"]},
+            })
+        self.assertEqual(raised.exception.code, "VALIDATION_FAILED")
 
     def test_all_registry_relationship_types_normalize(self) -> None:
         existing = {"part-of-launch", "depends-on"}

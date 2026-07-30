@@ -16,10 +16,11 @@ import {
 import { TOOL_NAMES_BY_FAMILY, type BackendFamily } from './backendFamilies';
 import { NativeTrackerError, safeErrorResult } from './errors';
 import { PythonBridge } from './pythonBridge';
+import { normalizeTimelineSelector, selectorSnapshotFailure } from './timeline/selector';
 import { prepareTimelineSync } from './timeline/sync';
 
 const COMMENT_ALLOWED_KEYS = new Set(['trackerId', 'limit', 'cursor', 'since', 'order']);
-const TIMELINE_ALLOWED_KEYS = new Set(['outputPath', 'includeUnscheduled', 'maxItems', 'from', 'to', 'launch']);
+const TIMELINE_ALLOWED_KEYS = new Set(['outputPath', 'includeUnscheduled', 'maxItems', 'from', 'to', 'launch', 'selector']);
 const REPORT_ALLOWED_KEYS = new Set(['outputPath', 'milestoneId', 'asOf', 'lookaheadDays', 'maxItems']);
 const QUERY_ALLOWED_KEYS = new Set(['where', 'savedQuery', 'sort', 'limit', 'cursor', 'includeArchived', 'includeRelationshipRecords', 'includeTotalCount']);
 const TRAVERSE_ALLOWED_KEYS = new Set(['roots', 'membership', 'expand', 'nodeWhere', 'limits', 'failOn', 'savedQuery']);
@@ -78,6 +79,21 @@ const TIMELINE_PROPERTIES = {
   launch: {
     type: 'string',
     description: 'Optional launchKey or launch issue key for a rooted launch snapshot.',
+  },
+  selector: {
+    type: 'object',
+    description: 'Optional fail-closed generator selector. launchTags selects tagged seeds plus one-hop relationship boundary endpoints.',
+    properties: {
+      launchTags: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 8,
+        uniqueItems: true,
+        items: { type: 'string', minLength: 1, maxLength: 100 },
+      },
+    },
+    required: ['launchTags'],
+    additionalProperties: false,
   },
 };
 
@@ -267,6 +283,18 @@ function validatedTimelineParams(
   if (params.launch !== undefined && (typeof params.launch !== 'string' || !params.launch.trim() || params.launch.trim().length > 100)) {
     throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'launch must be a non-empty string of at most 100 characters.' });
   }
+  if (params.launch !== undefined && params.selector !== undefined) {
+    throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'launch and selector cannot be combined.' });
+  }
+  let selector;
+  try {
+    selector = normalizeTimelineSelector(params.selector);
+  } catch (error) {
+    throw new NativeTrackerError({
+      code: 'INVALID_PARAMS',
+      message: error instanceof Error ? error.message : 'selector is invalid.',
+    });
+  }
   return {
     workspacePath,
     includeUnscheduled,
@@ -275,6 +303,7 @@ function validatedTimelineParams(
     ...(params.from ? { from: params.from } : {}),
     ...(params.to ? { to: params.to } : {}),
     ...(typeof params.launch === 'string' ? { launch: params.launch.trim() } : {}),
+    ...(selector ? { selector } : {}),
   };
 }
 
@@ -470,9 +499,24 @@ export async function activateBackend(context: BackendContext, family: BackendFa
     try {
       const params = validatedTimelineParams(raw, workspacePath);
       const snapshot = await bridge.request('timeline_snapshot', readerParams(params)) as Record<string, unknown>;
+      if (params.selector) {
+        const failure = selectorSnapshotFailure(snapshot);
+        if (failure) throw new NativeTrackerError(failure);
+      }
       const target = await confinedOutputPath(workspacePath, String(params.outputPath));
       const existing = await readTimelineShell(target);
-      const prepared = prepareTimelineSync(existing, snapshot, params, randomUUID());
+      const source = snapshot.source && typeof snapshot.source === 'object' && !Array.isArray(snapshot.source)
+        ? snapshot.source as Record<string, unknown>
+        : {};
+      const selectorGenerationId = typeof source.generationId === 'string' && source.generationId
+        ? source.generationId
+        : null;
+      const prepared = prepareTimelineSync(
+        existing,
+        snapshot,
+        params,
+        params.selector && selectorGenerationId ? selectorGenerationId : randomUUID(),
+      );
       await atomicWrite(target, `${JSON.stringify(prepared.document, null, 2)}\n`);
       const page = prepared.snapshot.page as Record<string, unknown> | undefined;
       const milestones = prepared.snapshot.milestones as unknown[] | undefined;

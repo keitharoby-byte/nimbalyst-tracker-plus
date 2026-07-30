@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.4.2 is Windows-first and was validated with Nimbalyst 0.71.3. Because
+Version 0.5.0 is Windows-first and was validated with Nimbalyst 0.71.3. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID,
@@ -22,7 +22,20 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ in the Midnight Orchid extension theme">
 </p>
 
-## What's new in 0.4.2
+## What's new in 0.5.0
+
+- Generate independent, fail-closed timeline artifacts from one or more
+  normalized `selector.launchTags` values.
+- Include active one-hop relationship endpoints as explicit boundary context
+  without leaking through them into unrelated launch graphs.
+- Refuse to replace an existing artifact when the selector has no matches, its
+  complete closure exceeds a cap, an endpoint is missing, validation fails, or
+  the safe response envelope would truncate the result.
+- Emit deterministic output identities plus selector seeds, closure counts,
+  source counts, schema/registry provenance, validation counts, and truncation
+  state in the generation receipt.
+
+## Previously in 0.4.2
 
 - Keep cursor-page item counts independent from normalized relationship-edge
   counts.

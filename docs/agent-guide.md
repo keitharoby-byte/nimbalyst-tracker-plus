@@ -332,6 +332,29 @@ Arguments:
 - `launch` is an optional launch key. When present, sync builds a rooted
   membership-plus-context snapshot instead of the global recent-item window.
   Keep separate `.ntimeline` files for separate launches.
+- `selector` is an optional generator-only selector and cannot be combined
+  with `launch`. Its current contract is `launchTags`, containing 1–8 unique,
+  non-empty tags. Values are trimmed, case-normalized, and sorted before use.
+
+For an independent tag-seeded artifact:
+
+```json
+{
+  "outputPath": "factory/PrediClear Alpha.ntimeline",
+  "selector": {
+    "launchTags": ["alpha-launch"]
+  },
+  "includeUnscheduled": true,
+  "maxItems": 500
+}
+```
+
+Tag selection is fail closed. Tracker+ selects all matching active seeds,
+discovers every active normalized relationship incident to those seeds, and
+includes the opposite endpoints as one-hop boundary context. It does not
+expand through boundary nodes. Caps are applied only after the complete
+closure is discovered, so the generator never emits a dangling relationship
+or a partial capped graph.
 
 The result reports item, milestone, and relationship counts plus truncation and
 source metadata. It also includes:
@@ -344,9 +367,18 @@ source metadata. It also includes:
 - prior/current/change milestone counts.
 
 The existing document title, view settings, and filters are retained when the
-file is regenerated. If the receipt is truncated or validation state is
-`fail`, narrow the projection or resolve the findings before replacing an
-official dashboard.
+file is regenerated. Global and launch-rooted sync retain their compatible
+receipt behavior. Tag-selected sync refuses to replace the destination if the
+selector has no matches, source/closure caps are exceeded, an endpoint cannot
+be resolved, error-severity validation is present, or the response would be
+truncated.
+
+The tag-selected receipt adds normalized selector values and type, stable seed
+IDs, source/closure/emitted item and relationship counts, boundary count,
+schema adapter and fingerprint, registry version and hash, project-state
+revision, validation counts, generated time, deterministic generation ID and
+output hash, and explicit truncation state. The normal sync receipt still
+provides the prior/current deltas for the destination file.
 
 The generated snapshot includes:
 
@@ -550,6 +582,11 @@ Common recoveries:
   path-addressed predicate error; never retry by sending SQL.
 - `RESULT_TRUNCATED` or `VALIDATION_FAILED`: narrow the graph or resolve the
   returned findings; fail-closed launch views must not be treated as complete.
+- `SELECTOR_NO_MATCH`: correct the requested tag or add it to the intended
+  active seed; the existing timeline file was not replaced.
+- `SOURCE_LIMIT_EXCEEDED` or `RESULT_LIMIT_EXCEEDED`: narrow the selected tag
+  union or raise `maxItems` within the documented cap; the existing file was
+  not replaced.
 - Missing tools: confirm extension enablement and consent for the relevant
   backend family, then verify the logs contain registrations of four read/query
   tools and two projection tools.

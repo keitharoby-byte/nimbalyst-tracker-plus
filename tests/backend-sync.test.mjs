@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import {
+  normalizeTimelineSelector,
+  selectorSnapshotFailure,
+} from '../src/timeline/selector.ts';
 import { prepareTimelineSync } from '../src/timeline/sync.ts';
 
 test('sync preserves curated metadata and reports warning-only validation and deterministic deltas', () => {
@@ -68,4 +72,40 @@ test('sync reports hard errors and keeps no-selector behavior for a new document
   assert.equal(prepared.validation.state, 'fail');
   assert.deepEqual(prepared.validation.bySeverity, { error: 1, warning: 0, info: 0 });
   assert.equal(prepared.delta.priorGenerationId, null);
+});
+
+test('tag selector validation normalizes deterministically and rejects ambiguous input', () => {
+  const selected = normalizeTimelineSelector({
+    launchTags: [' Demo-Launch ', 'ALPHA-LAUNCH'],
+  });
+  assert.deepEqual(selected, {
+    launchTags: ['alpha-launch', 'demo-launch'],
+  });
+
+  assert.throws(
+    () => normalizeTimelineSelector({ launchTags: ['Alpha-Launch', ' alpha-launch '] }),
+    /unique after normalization/,
+  );
+  assert.throws(
+    () => normalizeTimelineSelector({ launchTags: [] }),
+    /1 through 8/,
+  );
+});
+
+test('tag selector completeness guard rejects truncation and error validation', () => {
+  assert.equal(selectorSnapshotFailure({
+    page: { queryTruncated: false, responseTruncated: false },
+    validation: [{ severity: 'warning' }],
+  }), null);
+  assert.deepEqual(selectorSnapshotFailure({
+    page: { queryTruncated: true },
+    validation: [],
+  }), {
+    code: 'RESULT_TRUNCATED',
+    message: 'The selected timeline was incomplete, so the destination was not replaced.',
+  });
+  assert.equal(selectorSnapshotFailure({
+    page: {},
+    validation: [{ severity: 'error' }],
+  })?.code, 'VALIDATION_FAILED');
 });

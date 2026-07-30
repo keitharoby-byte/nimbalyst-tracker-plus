@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.5.0 - 2026-07-30
+
+- Add an optional `selector.launchTags` generator contract to
+  `native_tracker_sync_timeline` while preserving global, launch-rooted,
+  saved launch-scope, and role-query behavior.
+- Select normalized tag seeds first, include complete active one-hop
+  relationship boundaries, and preserve relationship direction, lifecycle,
+  dependency, scope/contribution, revision, and evidence provenance.
+- Fail before replacing the destination on invalid/duplicate selectors, no
+  matches, source or closure overflow, missing endpoints, error-severity
+  validation, or response truncation.
+- Add deterministic output identities and auditable seed, source, closure,
+  emission, schema, registry, validation, and truncation receipts.
+- Add independent Alpha/Demo, deterministic multi-tag union, source-isolation,
+  boundary, cap, invalid-selector, and endpoint failure tests.
+
 ## 0.4.2 - 2026-07-30
 
 - Keep `page.returnedCount` commensurable with item totals by excluding

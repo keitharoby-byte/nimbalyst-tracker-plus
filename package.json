@@ -1,6 +1,6 @@
 {
   "name": "com-prediclear-nimbalyst-tracker-plus",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Read-only Nimbalyst tracker queries, bounded relationship traversal, and auditable timeline projections.",
   "private": true,
   "license": "MIT",
