@@ -1,14 +1,73 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from reader.registry import effective_registry
+from reader.contracts import ReaderError
+from reader.registry import _load_bundle_from, effective_registry
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class RegistryTests(unittest.TestCase):
+    @staticmethod
+    def _bundle_fixture(directory: Path) -> dict[str, object]:
+        files: dict[str, str] = {}
+        for name in ("registry.py", "registry.json", "saved-queries.json"):
+            target = directory / name
+            shutil.copyfile(ROOT / "reader" / name, target)
+            files[name] = hashlib.sha256(target.read_bytes()).hexdigest()
+        manifest: dict[str, object] = {
+            "formatVersion": 1,
+            "generationId": hashlib.sha256(
+                json.dumps(files, sort_keys=True).encode("utf-8")
+            ).hexdigest(),
+            "extensionVersion": "9.9.9",
+            "adapterVersion": 3,
+            "registryVersion": 3,
+            "files": files,
+        }
+        (directory / "bundle-manifest.json").write_text(
+            json.dumps(manifest),
+            encoding="utf-8",
+        )
+        return manifest
+
+    def test_verified_bundle_reports_release_and_asset_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self._bundle_fixture(root)
+            registry, diagnostics = _load_bundle_from(root, require_manifest=True)
+            self.assertEqual(registry["version"], 3)
+            self.assertEqual(diagnostics["verificationState"], "verified")
+            self.assertEqual(diagnostics["extensionVersion"], "9.9.9")
+            self.assertEqual(diagnostics["adapterVersion"], 3)
+            self.assertEqual(diagnostics["generationId"], manifest["generationId"])
+            self.assertEqual(
+                set(diagnostics["assetHashes"]),
+                {"registry.py", "registry.json", "saved-queries.json"},
+            )
+
+    def test_mismatched_bundle_fails_with_actionable_restart_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._bundle_fixture(root)
+            (root / "saved-queries.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(ReaderError) as raised:
+                _load_bundle_from(root, require_manifest=True)
+            error = raised.exception
+            self.assertEqual(error.code, "READER_RESTART_REQUIRED")
+            self.assertEqual(error.details["extensionVersion"], "9.9.9")
+            self.assertEqual(error.details["adapterVersion"], 3)
+            self.assertEqual(error.details["registryVersion"], 3)
+            self.assertTrue(error.details["assetPath"].endswith("saved-queries.json"))
+            self.assertEqual(len(error.details["expectedHash"]), 64)
+            self.assertEqual(len(error.details["actualHash"]), 64)
+
     def test_valid_override_changes_terminal_status_and_roles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

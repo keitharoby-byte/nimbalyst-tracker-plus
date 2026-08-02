@@ -5,21 +5,27 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 try:
-    from .contracts import ReaderError
+    from .contracts import SCHEMA_ADAPTER, ReaderError
 except ImportError:  # pragma: no cover
-    from contracts import ReaderError  # type: ignore[no-redef]
+    from contracts import SCHEMA_ADAPTER, ReaderError  # type: ignore[no-redef]
 
 LOCKED_OVERRIDE_KEYS = {"relationshipTypes", "scopeRoles", "executableTypes", "caps", "version"}
 OVERRIDABLE_KEYS = {"terminalStatuses", "roles", "savedQueries", "dispatchPolicy"}
+BUNDLE_MANIFEST = "bundle-manifest.json"
+BUNDLE_FORMAT_VERSION = 1
+BUNDLE_DIAGNOSTIC_FILES = ("registry.py", "registry.json", "saved-queries.json")
 REQUIRED_CAPS = {
     "queryLimitDefault", "queryLimitMax", "clauseDepthMax", "clauseCountMax",
     "listValuesMax", "textTermMax", "traverseNodesMax", "traverseEdgesMax",
     "traverseDepthMax", "traverseRootsMax",
 }
+_BUNDLED_CACHE: dict[str, Any] | None = None
+_BUNDLED_DIAGNOSTICS: dict[str, Any] | None = None
 
 
 def _string_list(value: Any, *, nonempty: bool = True) -> bool:
@@ -113,17 +119,178 @@ def _validate_registry(value: Any) -> None:
         raise ValueError("dispatchPolicy is invalid")
 
 
-def _load_bundled() -> dict[str, Any]:
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _manifest_identity(manifest: Any) -> dict[str, Any]:
+    if not isinstance(manifest, dict):
+        return {}
+    return {
+        "extensionVersion": manifest.get("extensionVersion", "unavailable"),
+        "adapterVersion": manifest.get("adapterVersion", "unavailable"),
+        "registryVersion": manifest.get("registryVersion", "unavailable"),
+        "generationId": manifest.get("generationId", "unavailable"),
+    }
+
+
+def _bundle_details(
+    directory: Path,
+    manifest: Any,
+    cause: str,
+    *,
+    asset: str | None = None,
+    expected_hash: str | None = None,
+    actual_hash: str | None = None,
+) -> dict[str, Any]:
+    details = {
+        **_manifest_identity(manifest),
+        "manifestPath": str(directory / BUNDLE_MANIFEST),
+        "assetPaths": {
+            name: str(directory / name)
+            for name in BUNDLE_DIAGNOSTIC_FILES
+        },
+        "validationCause": cause[:300],
+    }
+    if asset:
+        details["assetPath"] = str(directory / asset)
+    if expected_hash:
+        details["expectedHash"] = expected_hash
+    if actual_hash:
+        details["actualHash"] = actual_hash
+    return details
+
+
+def _validated_bundle_manifest(directory: Path, *, require_manifest: bool) -> dict[str, Any] | None:
+    manifest_path = directory / BUNDLE_MANIFEST
+    if not manifest_path.is_file():
+        if require_manifest:
+            raise ReaderError(
+                "READER_RESTART_REQUIRED",
+                "Tracker+ could not load one complete reader generation. Reload the extension and retry.",
+                _bundle_details(directory, {}, "bundle-manifest-missing"),
+            )
+        return None
     try:
-        value = json.loads((Path(__file__).with_name("registry.json")).read_text(encoding="utf-8"))
-        catalog = json.loads((Path(__file__).with_name("saved-queries.json")).read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReaderError(
+            "READER_RESTART_REQUIRED",
+            "Tracker+ could not load one complete reader generation. Reload the extension and retry.",
+            _bundle_details(directory, {}, f"bundle-manifest-invalid: {error}"),
+        ) from error
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("formatVersion") != BUNDLE_FORMAT_VERSION
+        or not isinstance(manifest.get("generationId"), str)
+        or not isinstance(manifest.get("extensionVersion"), str)
+        or not isinstance(manifest.get("adapterVersion"), int)
+        or not isinstance(manifest.get("registryVersion"), int)
+        or not isinstance(files, dict)
+    ):
+        raise ReaderError(
+            "READER_RESTART_REQUIRED",
+            "Tracker+ could not load one complete reader generation. Reload the extension and retry.",
+            _bundle_details(directory, manifest, "bundle-manifest-fields-invalid"),
+        )
+    for name in BUNDLE_DIAGNOSTIC_FILES:
+        expected = files.get(name)
+        path = directory / name
+        if not isinstance(expected, str) or len(expected) != 64:
+            raise ReaderError(
+                "READER_RESTART_REQUIRED",
+                "Tracker+ could not load one complete reader generation. Reload the extension and retry.",
+                _bundle_details(directory, manifest, "asset-hash-missing", asset=name),
+            )
+        try:
+            actual = _sha256(path)
+        except OSError as error:
+            raise ReaderError(
+                "READER_RESTART_REQUIRED",
+                "Tracker+ could not load one complete reader generation. Reload the extension and retry.",
+                _bundle_details(
+                    directory,
+                    manifest,
+                    f"asset-unavailable: {error}",
+                    asset=name,
+                    expected_hash=expected,
+                ),
+            ) from error
+        if actual != expected:
+            raise ReaderError(
+                "READER_RESTART_REQUIRED",
+                "Tracker+ could not load one complete reader generation. Reload the extension and retry.",
+                _bundle_details(
+                    directory,
+                    manifest,
+                    "asset-hash-mismatch",
+                    asset=name,
+                    expected_hash=expected,
+                    actual_hash=actual,
+                ),
+            )
+    return manifest
+
+
+def _load_bundle_from(directory: Path, *, require_manifest: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+    manifest = _validated_bundle_manifest(directory, require_manifest=require_manifest)
+    try:
+        value = json.loads((directory / "registry.json").read_text(encoding="utf-8"))
+        catalog = json.loads((directory / "saved-queries.json").read_text(encoding="utf-8"))
         if not _validate_query_catalog(catalog):
             raise ValueError("saved query catalog is invalid")
         value["savedQueries"] = copy.deepcopy(catalog["queries"])
         _validate_registry(value)
-        return value
+        if manifest and manifest["registryVersion"] != value["version"]:
+            raise ValueError("registry version does not match bundle manifest")
+        diagnostics = {
+            **_manifest_identity(manifest or {}),
+            "verificationState": "verified" if manifest else "development-unmanifested",
+            "manifestPath": str(directory / BUNDLE_MANIFEST),
+            "assetPaths": {
+                name: str(directory / name)
+                for name in BUNDLE_DIAGNOSTIC_FILES
+            },
+            "assetHashes": {
+                name: _sha256(directory / name)
+                for name in BUNDLE_DIAGNOSTIC_FILES
+            },
+        }
+        if not manifest:
+            diagnostics.update({
+                "extensionVersion": "development",
+                "adapterVersion": SCHEMA_ADAPTER,
+                "registryVersion": value["version"],
+                "generationId": "development-unmanifested",
+            })
+        return value, diagnostics
     except (OSError, json.JSONDecodeError, ValueError) as error:
-        raise ReaderError("REGISTRY_INVALID", "The bundled Tracker+ registry is invalid.") from error
+        raise ReaderError(
+            "REGISTRY_INVALID",
+            "The bundled Tracker+ registry is invalid.",
+            _bundle_details(directory, manifest or {}, str(error)),
+        ) from error
+
+
+def _load_bundled() -> dict[str, Any]:
+    global _BUNDLED_CACHE, _BUNDLED_DIAGNOSTICS
+    if _BUNDLED_CACHE is None:
+        require_manifest = os.environ.get("TRACKER_PLUS_REQUIRE_BUNDLE_MANIFEST") == "1"
+        _BUNDLED_CACHE, _BUNDLED_DIAGNOSTICS = _load_bundle_from(
+            Path(__file__).resolve().parent,
+            require_manifest=require_manifest,
+        )
+    return copy.deepcopy(_BUNDLED_CACHE)
+
+
+def bundled_diagnostics() -> dict[str, Any]:
+    _load_bundled()
+    return copy.deepcopy(_BUNDLED_DIAGNOSTICS or {})
 
 
 def _validate_override(value: Any) -> None:

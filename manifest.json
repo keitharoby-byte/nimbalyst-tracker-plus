@@ -1,7 +1,7 @@
 {
   "id": "com.prediclear.nimbalyst-native-tracker-comments",
   "name": "Tracker+",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Read-only tracker queries, bounded relationship traversal, and auditable timeline, risk, and milestone projections.",
   "author": "PrediClear",
   "main": "dist/index.js",

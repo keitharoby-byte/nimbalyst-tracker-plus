@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { access, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ const required = [
   'dist/reader/registry.py',
   'dist/reader/registry.json',
   'dist/reader/saved-queries.json',
+  'dist/reader/bundle-manifest.json',
   'dist/reader/timeline-item.schema.yaml',
 ];
 
@@ -53,6 +55,25 @@ for (const relativePath of required) {
 const readerFiles = await readdir(path.join(root, 'dist', 'reader'));
 if (readerFiles.some((file) => file.endsWith('.pyc') || file === '__pycache__')) {
   throw new Error('Compiled Python cache files must not be packaged.');
+}
+
+const readerManifest = JSON.parse(
+  await readFile(path.join(root, 'dist', 'reader', 'bundle-manifest.json'), 'utf8'),
+);
+if (
+  readerManifest.formatVersion !== 1
+  || readerManifest.extensionVersion !== manifest.version
+  || readerManifest.adapterVersion !== 3
+  || readerManifest.registryVersion !== 3
+) {
+  throw new Error('Reader bundle identity does not match the extension release.');
+}
+for (const [file, expectedHash] of Object.entries(readerManifest.files ?? {})) {
+  const bytes = await readFile(path.join(root, 'dist', 'reader', file));
+  const actualHash = createHash('sha256').update(bytes).digest('hex');
+  if (actualHash !== expectedHash) {
+    throw new Error(`Reader bundle hash mismatch for ${file}.`);
+  }
 }
 
 const distFiles = await readdir(path.join(root, 'dist'));

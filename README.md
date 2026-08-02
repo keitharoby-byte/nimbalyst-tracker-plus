@@ -202,6 +202,13 @@ bundled schema template before manually registering
 `.nimbalyst/trackers/timeline-item.yaml`; Tracker+ never performs that repair
 automatically.
 
+They also include a verified reader-bundle generation with extension, adapter,
+and registry versions plus bounded asset path/hash provenance. Each native
+helper runs from an immutable snapshot, so a live extension update cannot mix
+Python code and JSON assets. If no complete generation becomes available
+during the bounded startup window, Tracker+ returns
+`READER_RESTART_REQUIRED` with actionable diagnostics and no tracker content.
+
 ## Quick start
 
 1. Confirm **Tracker+** is enabled in Nimbalyst Extensions. New installs

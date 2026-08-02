@@ -1,6 +1,6 @@
 {
   "name": "com-prediclear-nimbalyst-tracker-plus",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Read-only Nimbalyst tracker queries, bounded relationship traversal, and auditable timeline projections.",
   "private": true,
   "license": "MIT",
@@ -18,7 +18,7 @@
     "build": "vite build && node scripts/clean-backend-assets.mjs && vite build --config vite.backend.config.ts && node scripts/copy-reader-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test:python": "python -m unittest discover -s tests/python -v",
-    "test": "npm run typecheck && node --test tests/backend-registration.test.mjs tests/backend-sync.test.mjs tests/timeline-model.test.mjs tests/theme-contrast.test.mjs && npm run test:python",
+    "test": "npm run typecheck && node --test tests/backend-registration.test.mjs tests/backend-sync.test.mjs tests/reader-bundle.test.mjs tests/timeline-model.test.mjs tests/theme-contrast.test.mjs && npm run test:python",
     "verify:package": "node scripts/verify-package.mjs"
   },
   "dependencies": {

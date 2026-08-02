@@ -177,6 +177,20 @@ expanded definition under `query`, so callers can audit exactly what ran.
 Always inspect `page`, `validation`, and `watermark` before acting on the
 result.
 
+### Reader generation receipts
+
+Every source and query/traversal watermark includes `readerBundle`. A packaged
+release reports `verificationState: "verified"` together with
+`extensionVersion`, `adapterVersion`, `registryVersion`, `generationId`, and
+the loaded registry asset paths and SHA-256 hashes. The helper runs from an
+immutable snapshot of that generation.
+
+If a live install is temporarily incomplete, Tracker+ retries for a bounded
+window and then returns `READER_RESTART_REQUIRED` with the mismatched asset,
+expected and actual hashes, and validation cause. The response is terminal and
+contains no tracker rows, candidates, counts, or rollups. Reload the extension
+and retry; do not edit tracker rows or workspace registry files to recover.
+
 ### Role resolution
 
 For a conceptual explanation, common examples, and the difference between

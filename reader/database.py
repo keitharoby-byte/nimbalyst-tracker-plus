@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import os
@@ -35,7 +36,7 @@ try:
         ReaderError,
     )
     from .query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, sort_sql, validate_sort
-    from .registry import effective_registry
+    from .registry import bundled_diagnostics, effective_registry
     from .traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage
 except ImportError:  # pragma: no cover - used when server.py runs as a script
     from contracts import (  # type: ignore[no-redef]
@@ -57,7 +58,7 @@ except ImportError:  # pragma: no cover - used when server.py runs as a script
         ReaderError,
     )
     from query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, sort_sql, validate_sort  # type: ignore[no-redef]
-    from registry import effective_registry  # type: ignore[no-redef]
+    from registry import bundled_diagnostics, effective_registry  # type: ignore[no-redef]
     from traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage  # type: ignore[no-redef]
 
 
@@ -67,6 +68,7 @@ class NativeTrackerReader:
     def __init__(self, database_path: Path | None = None) -> None:
         self._database_path = database_path
         self._registry, self._registry_override_active, self._registry_override_error, self._registry_hash = effective_registry(Path.cwd())
+        self._bundle_diagnostics = bundled_diagnostics()
 
     def _load_registry(self, workspace_path: str) -> None:
         (
@@ -523,6 +525,7 @@ class NativeTrackerReader:
             "schemaFingerprint": fingerprint,
             "registryVersion": self._registry["version"],
             "registryHash": self._registry_hash,
+            "readerBundle": copy.deepcopy(self._bundle_diagnostics),
             "sourceRevision": source_revision or "unavailable",
         }
         output_hash = hashlib.sha256(
@@ -3341,6 +3344,7 @@ class NativeTrackerReader:
             "registryVersion": self._registry["version"],
             "registryOverrideActive": self._registry_override_active,
             "registryHash": self._registry_hash,
+            "readerBundle": copy.deepcopy(self._bundle_diagnostics),
         }
         if schema_discovery is not None:
             source["schemaDiscovery"] = dict(schema_discovery)
@@ -3487,6 +3491,7 @@ class NativeTrackerReader:
             "registryVersion": self._registry["version"],
             "registryOverrideActive": self._registry_override_active,
             "registryHash": self._registry_hash,
+            "readerBundle": copy.deepcopy(self._bundle_diagnostics),
             "sourceItemCount": item_count,
             "sourceRelationshipCount": relationship_count,
             "durationMs": round((time.perf_counter() - started) * 1000, 2),
