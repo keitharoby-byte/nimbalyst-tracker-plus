@@ -6,11 +6,10 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.6.0 is Windows-first and was validated with Nimbalyst 0.71.3. Because
+Version 0.7.0 is Windows-first and was validated with Nimbalyst 0.71.3. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
-The extension keeps its original technical ID,
-`com.prediclear.nimbalyst-native-tracker-comments`, so existing installations
+The extension keeps its original technical ID so existing installations
 upgrade in place despite the broader Tracker+ name.
 
 ## Screenshots
@@ -22,7 +21,21 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ in the Midnight Orchid extension theme">
 </p>
 
-## What's new in 0.6.0
+## What's new in 0.7.0
+
+- Compose a validated root predicate and a typed relationship traversal in one
+  bounded saved query. Installers can define composed templates in
+  `.nimbalyst/tracker-plus.queries.json` without changing extension code.
+- Inspect evidence-backed walk readiness with normalized `walkStage`,
+  `buildState`, and `readiness` fields, hard-serial predecessor controls, and
+  stored-versus-derived provenance. Missing evidence stays explicitly unknown.
+- Keep role inbox queries stable when result rows also contain legacy
+  relationship fields, while preserving role-distinct native relationships.
+- Keep large dispatch scans bounded by applying archive, workflow, role, and
+  scope admission before detailed evidence receipts. Auditable exclusion totals
+  and fingerprints remain available without serializing the whole source set.
+
+## Previously in 0.6.0
 
 - Validate only eligible selected traversal edges and explicit boundary
   evidence; retired, archived, filtered, and unrelated edges no longer leak

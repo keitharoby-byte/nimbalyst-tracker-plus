@@ -4,7 +4,7 @@ This is a Nimbalyst extension project. Read [CLAUDE.md](./CLAUDE.md) before maki
 
 ## What This Project Is
 
-- Extension ID: `com.prediclear.nimbalyst-native-tracker-comments`
+- The stable extension ID is declared in `manifest.json`.
 - Template: `starter` (repurposed for a custom editor and utility backend)
 - Build output is declared by `manifest.json`
 - Source lives in `src/`

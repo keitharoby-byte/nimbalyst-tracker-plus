@@ -40,7 +40,7 @@ def _validate_saved_queries(value: Any) -> bool:
     for query_id, query in value.items():
         if not isinstance(query_id, str) or not isinstance(query, dict):
             return False
-        if query.get("kind") not in {"predicate", "traversal"}:
+        if query.get("kind") not in {"predicate", "traversal", "composed"}:
             return False
         if not isinstance(query.get("version"), int) or query["version"] < 1:
             return False

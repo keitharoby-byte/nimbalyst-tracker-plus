@@ -77,6 +77,56 @@ class QueryTraverseTests(unittest.TestCase):
         injection = self.reader.query_items({"workspacePath": self.workspace, "where": {"field": "title", "op": "eq", "value": "' OR 1=1 --"}})
         self.assertEqual(injection["page"]["totalCount"], 0)
 
+    def test_saved_role_result_with_legacy_relationships_normalizes_without_crashing(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(
+                connection,
+                "legacy-role-item",
+                "ITEM-LEGACY-ROLE",
+                "task",
+                {
+                    "title": "Legacy relationship fixture",
+                    "status": "ready",
+                    "owner": "legacy-reviewer",
+                    "blockers": [{"itemId": "prior"}],
+                },
+            )
+            connection.commit()
+        (Path(self.workspace) / ".nimbalyst" / "tracker-plus.registry.json").write_text(
+            json.dumps({
+                "roles": {
+                    "legacy-reviewer": {
+                        "ownerAliases": ["legacy-reviewer"],
+                        "attentionTags": ["needs-legacy-review"],
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "role-active-work-and-attention",
+                "params": {"roleId": "legacy-reviewer"},
+            },
+        })
+
+        self.assertEqual([node["id"] for node in result["nodes"]], ["legacy-role-item"])
+        self.assertEqual(
+            [
+                (
+                    edge["sourceId"],
+                    edge["relationshipType"],
+                    edge["targetId"],
+                    edge["scopeRole"],
+                    edge["contributionRole"],
+                )
+                for edge in result["edges"]
+            ],
+            [("legacy-role-item", "depends-on", "prior", None, None)],
+        )
+
     def test_workspace_query_catalog_changes_queries_without_code_changes(self) -> None:
         query_catalog = {
             "version": 1,
@@ -121,6 +171,227 @@ class QueryTraverseTests(unittest.TestCase):
                 },
             })
         self.assertEqual(raised.exception.code, "SAVED_QUERY_NOT_FOUND")
+
+    def test_workspace_catalog_can_define_a_composed_query_without_code_changes(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(
+                connection,
+                "workspace-composed-root",
+                "CONTROL-1",
+                "feature",
+                {
+                    "title": "Workspace selected control root",
+                    "status": "active",
+                    "walkStage": "local-verifiable",
+                },
+            )
+            self._link(
+                connection,
+                "workspace-composed-edge",
+                "CONTROL-REL-1",
+                "workspace-composed-root",
+                "prior",
+                "depends-on",
+                hardness="hard-serial",
+                clearing_condition="Prior control is complete",
+                owner="reviewer",
+            )
+            connection.commit()
+        (Path(self.workspace) / ".nimbalyst" / "tracker-plus.queries.json").write_text(
+            json.dumps({
+                "version": 1,
+                "queries": {
+                    "workspace-composed-control": {
+                        "version": 1,
+                        "kind": "composed",
+                        "params": [],
+                        "definition": {
+                            "mode": "composed-v1",
+                            "select": {
+                                "where": {
+                                    "field": "issueKey",
+                                    "op": "eq",
+                                    "value": "CONTROL-1",
+                                },
+                                "limit": 1,
+                            },
+                            "traverse": {
+                                "expand": {
+                                    "relationshipTypes": ["depends-on"],
+                                    "direction": "outgoing",
+                                    "maxDepth": 1,
+                                    "edgeWhere": {"status": ["active"]},
+                                    "externalEndpointBehavior": "boundary",
+                                },
+                            },
+                            "failOn": {"truncation": True, "validation": False},
+                        },
+                    },
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "workspace-composed-control",
+                "params": {},
+            },
+        })
+
+        self.assertEqual([node["id"] for node in result["nodes"]], ["workspace-composed-root"])
+        self.assertEqual([node["id"] for node in result["boundaryNodes"]], ["prior"])
+        self.assertEqual([edge["id"] for edge in result["edges"]], ["workspace-composed-edge"])
+        self.assertTrue(result["query"]["selection"]["complete"])
+
+    def test_walk_ready_composition_is_evidence_backed_and_terminal_authoritative(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(
+                connection,
+                "walk-blocked",
+                "CONTROL-20",
+                "feature",
+                {
+                    "title": "Blocked walk control",
+                    "status": "active",
+                    "buildState": "build-complete",
+                    "walkStage": "local-verifiable",
+                    "requiredRuntimeAvailable": True,
+                    "gate": "Walk the completed behavior",
+                },
+            )
+            self._insert(
+                connection,
+                "walk-terminal",
+                "CONTROL-21",
+                "feature",
+                {
+                    "title": "Completed walk control",
+                    "status": "done",
+                    "buildState": "build-complete",
+                    "walkStage": "production-only",
+                    "requiredRuntimeAvailable": False,
+                },
+            )
+            self._insert(
+                connection,
+                "walk-unverified",
+                "CONTROL-22",
+                "feature",
+                {
+                    "title": "Unverified walk control",
+                    "status": "active",
+                    "buildState": "build-complete",
+                    "walkStage": "mixed",
+                    "requiredRuntimeAvailable": True,
+                    "gate": "Verify the merged behavior",
+                },
+            )
+            self._insert(
+                connection,
+                "implementing-artifact",
+                "ARTIFACT-20",
+                "document",
+                {"title": "Merged implementation evidence", "status": "active"},
+            )
+            self._insert(
+                connection,
+                "walk-predecessor",
+                "CONTROL-19",
+                "task",
+                {"title": "Required predecessor", "status": "active"},
+            )
+            self._link(
+                connection,
+                "walk-implements",
+                "CONTROL-REL-20",
+                "implementing-artifact",
+                "walk-blocked",
+                "implements",
+            )
+            self._link(
+                connection,
+                "walk-blocker",
+                "CONTROL-REL-21",
+                "walk-blocked",
+                "walk-predecessor",
+                "depends-on",
+                hardness="hard-serial",
+                clearing_condition="Predecessor acceptance is complete",
+                owner="reviewer",
+            )
+            self._link(
+                connection,
+                "walk-terminal-stale-blocker",
+                "CONTROL-REL-22",
+                "walk-terminal",
+                "walk-predecessor",
+                "depends-on",
+                hardness="hard-serial",
+                clearing_condition="Stale child condition",
+                owner="reviewer",
+            )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {"id": "walk-ready-milestones", "params": {}},
+        })
+        roots = {node["id"]: node for node in result["nodes"]}
+
+        self.assertEqual(set(roots), {"walk-blocked", "walk-terminal", "walk-unverified"})
+        self.assertEqual(roots["walk-blocked"]["buildState"], "build-complete")
+        self.assertEqual(roots["walk-blocked"]["readiness"], "blocked")
+        self.assertEqual(
+            roots["walk-blocked"]["serialPredecessor"]["relationshipId"],
+            "walk-blocker",
+        )
+        self.assertEqual(
+            roots["walk-blocked"]["walkReadinessProvenance"]["implementingEvidence"],
+            [{
+                "itemId": "implementing-artifact",
+                "issueKey": "ARTIFACT-20",
+                "relationshipId": "walk-implements",
+                "relationshipType": "implements",
+            }],
+        )
+        self.assertEqual(roots["walk-terminal"]["readiness"], "walk-ready")
+        self.assertEqual(roots["walk-terminal"]["walkReadiness"]["percentage"], 100)
+        self.assertIsNone(roots["walk-terminal"]["serialPredecessor"])
+        self.assertEqual(roots["walk-unverified"]["buildState"], "unknown")
+        self.assertEqual(roots["walk-unverified"]["readiness"], "unknown")
+        self.assertIn(
+            "walk-build-evidence-missing",
+            {finding["code"] for finding in result["validation"]["findings"]},
+        )
+        self.assertFalse(result["page"]["truncated"])
+        self.assertTrue(result["query"]["selection"]["complete"])
+
+    def test_walk_ready_composition_fails_closed_when_root_selection_overflows(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            for index in range(9):
+                self._insert(
+                    connection,
+                    f"walk-overflow-{index}",
+                    f"CONTROL-{100 + index}",
+                    "feature",
+                    {
+                        "title": f"Walk control {index}",
+                        "status": "active",
+                        "buildState": "build-complete",
+                        "walkStage": "local-verifiable",
+                    },
+                )
+            connection.commit()
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {"id": "walk-ready-milestones", "params": {}},
+            })
+
+        self.assertEqual(raised.exception.code, "RESULT_TRUNCATED")
 
     def test_query_cursor_reconciles_total_count(self) -> None:
         params = {"workspacePath": self.workspace, "where": {"field": "issueKey", "op": "exists", "value": True}, "sort": [{"field": "id", "direction": "asc"}], "limit": 200}
@@ -853,7 +1124,11 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(first["page"]["candidateCount"], 2)
         self.assertEqual(
             first["page"]["inspectedCount"],
-            len(first["receipts"]),
+            len(first["receipts"]) + first["page"]["preAdmissionExcludedCount"],
+        )
+        self.assertEqual(
+            first["admission"]["sourceDispatchableCount"],
+            first["page"]["inspectedCount"],
         )
         excluded = {
             receipt["itemId"]: receipt["exclusionReasons"]
@@ -878,6 +1153,74 @@ class QueryTraverseTests(unittest.TestCase):
             {edge["id"] for edge in first["edges"]},
         )
         self.assertEqual(first["validation"]["state"], "pass")
+
+    def test_dispatch_large_workspace_summarizes_pre_admission_exclusions(self) -> None:
+        ready = {
+            "status": "ready",
+            "owner": "coordinator",
+            "packetRevision": "rev-large",
+            "currentRevision": "rev-large",
+            "qaEvidenceRevision": "rev-large",
+            "qaStatus": "passed",
+            "holdState": "clear",
+            "databaseRouteState": "approved",
+            "custodyState": "vacant",
+            "survivorState": "unique",
+            "collisionState": "clear",
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(
+                connection,
+                "dispatch-large-ready",
+                "ITEM-LARGE-READY",
+                "task",
+                {**ready, "title": "Ready packet"},
+            )
+            self._link(
+                connection,
+                "dispatch-large-membership",
+                "REL-LARGE-READY",
+                "dispatch-large-ready",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            for index in range(2_400):
+                self._insert(
+                    connection,
+                    f"bulk-nonready-{index:04d}",
+                    f"ITEM-BULK-{index:04d}",
+                    "task",
+                    {
+                        "title": f"Non-ready packet {index}",
+                        "status": "in-progress",
+                        "owner": "coordinator",
+                    },
+                )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {
+                    "roleId": "coordinator",
+                    "launchKeys": ["RELEASE-A"],
+                    "includeUnscoped": False,
+                },
+            },
+        })
+
+        self.assertEqual([node["id"] for node in result["nodes"]], ["dispatch-large-ready"])
+        self.assertFalse(result["page"]["truncated"])
+        self.assertGreaterEqual(result["page"]["inspectedCount"], 2_401)
+        self.assertGreaterEqual(result["page"]["preAdmissionExcludedCount"], 2_400)
+        self.assertEqual(
+            result["admission"]["preAdmissionReasonCounts"]["workflow-not-dispatch-ready"],
+            result["page"]["preAdmissionExcludedCount"],
+        )
+        self.assertEqual(result["page"]["detailedReceiptCount"], 1)
+        self.assertLess(self.reader._json_size(result), 500 * 1024)
 
     def test_dispatch_incomplete_evidence_returns_terminal_empty_receipt(self) -> None:
         with closing(sqlite3.connect(self.db_path)) as connection:

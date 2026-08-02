@@ -24,8 +24,7 @@ with a built-in tracker tool, then run `native_tracker_sync_timeline` again.
 ## Enablement and discovery
 
 - The installed extension is named **Tracker+**.
-- Its stable extension ID is
-  `com.prediclear.nimbalyst-native-tracker-comments`.
+- Its stable extension ID is declared in `manifest.json`.
 - Two backend families are consent-gated. Comment/query/traversal tools may
   require first-use native-code approval; timeline/report generation may also
   require workspace-file approval.
@@ -153,8 +152,9 @@ context. Saved launch queries are the preferred contract:
 }
 ```
 
-Bundled traversal query IDs are `dispatch-eligible-work-v1`, `launch-scope`,
-`launch-hard-blockers`, `launch-open-reviews`, and
+Bundled traversal query IDs are `dispatch-eligible-work-v1`,
+`walk-ready-milestones`, `launch-scope`, `launch-hard-blockers`,
+`launch-open-reviews`, and
 `launch-unscheduled-executable-work`. A direct call
 accepts `roots` (1–8 issue keys, launch keys, or IDs), optional `membership`
 and `expand` stages, an optional predicate `nodeWhere`, bounded `limits`, and
@@ -242,6 +242,7 @@ opaque `page.nextCursor`; never edit or reuse a cursor with another query.
 |---|---|---|---|
 | `role-active-work-and-attention` | `native_tracker_query` | `roleId` | Nonterminal, non-archived work whose owner matches a role alias **or** whose tags contain a role attention tag. Excludes relationship records by default; returns deterministic cursor pages and a total count. |
 | `dispatch-eligible-work-v1` | `native_tracker_traverse` | Optional `roleId`, `launchKeys[]`, `includeUnscoped` | Current, QA-passed, conflict-free task/bug packets across eligible launches. Returns auditable inclusion/exclusion receipts and fails closed on any warning, validation error, unresolved evidence, incomplete required evidence, cycle, or truncation. |
+| `walk-ready-milestones` | `native_tracker_traverse` | None | Selects roots with explicit native walk/build fields, expands hard-serial predecessor plus implementation/evidence edges, and returns evidence-backed walk readiness in one bounded result. Selection overflow is terminal; missing evidence remains `unknown` with visible validation findings. |
 | `launch-scope` | `native_tracker_traverse` | `launchKey` | Active depth-one launch members plus two bounded context levels across `governs`, `contributes-to`, `reviews`, `evidences`, and `depends-on`. External context is returned as boundary nodes. Fails closed on truncation or error-severity validation. |
 | `launch-hard-blockers` | `native_tracker_traverse` | `launchKey` | Active `hard-serial` `depends-on` edges around launch members, with external endpoints as boundaries. Fails closed on truncation; validation findings remain visible without failing warning-only runs. |
 | `launch-open-reviews` | `native_tracker_traverse` | `launchKey` | Active `reviews` edges for nonterminal launch members, with external endpoints as boundaries. Fails closed on truncation. |
@@ -262,6 +263,15 @@ Copy-paste dispatch and launch queries:
       "launchKeys": ["RELEASE-A", "RELEASE-B"],
       "includeUnscoped": false
     }
+  }
+}
+```
+
+```json
+{
+  "savedQuery": {
+    "id": "walk-ready-milestones",
+    "params": {}
   }
 }
 ```
@@ -333,11 +343,15 @@ as frontier metadata and never impose an execution-capacity limit.
 
 Every successful result includes:
 
-- ordered candidate `nodes`, all `receipts`, and an `excluded` subset;
+- ordered candidate `nodes`, detailed receipts for admitted rows, and a compact
+  `excluded` subset;
 - revision, QA, ancestry, dependency, hold, route, custody,
-  survivor/collision, scope-fingerprint, and reason evidence per inspected row;
-- `candidateCount`, `inspectedCount`, truncation, resolved roots, boundary
-  rules, schema/registry provenance, watermark, and `queryFingerprint`;
+  survivor/collision, scope-fingerprint, and reason evidence per admitted row;
+- `admission` totals, reason counts, and a stable fingerprint for rows excluded
+  before detailed evidence inspection;
+- `candidateCount`, source `inspectedCount`, `detailedReceiptCount`,
+  `preAdmissionExcludedCount`, truncation, resolved roots, boundary rules,
+  schema/registry provenance, watermark, and `queryFingerprint`;
 - per-launch totals, only after all fail-closed checks pass.
 
 Any warning, error, unresolved selected edge, evidence gap, ordering cycle, or
@@ -427,6 +441,32 @@ registry override warning. The effective query catalog contributes to
 `registryHash`, so agents can detect configuration changes. The older
 `savedQueries` key in `tracker-plus.registry.json` remains supported for
 compatibility, but the dedicated catalog is the preferred public interface.
+
+Catalog entries may use `kind: "predicate"`, `kind: "traversal"`, or
+`kind: "composed"`. A composed definition runs a bounded `select` predicate,
+uses the selected item IDs as traversal roots, and then applies a typed
+`traverse` stage. The root selector must fit within the configured traversal
+root cap; otherwise a fail-closed template returns `RESULT_TRUNCATED` without
+a partial graph.
+
+The optional `walk-readiness-v1` projection recognizes only native
+`walkStage` values `local-verifiable`, `production-only`, or `mixed` and native
+`buildState` values `build-complete`, `in-build`, or `not-started`. Unsupported
+or absent values normalize to `unknown`; titles and tags are never used to
+infer a positive state. A nonterminal root is `walk-ready` only when:
+
+- its stored build-complete state has resolved active `implements` or
+  `evidences` relationship evidence;
+- every selected hard-serial predecessor is cleared;
+- `requiredRuntimeAvailable` is explicitly `true`; and
+- native gate or acceptance content is present.
+
+The result includes `serialPredecessor`, `blockingCondition`,
+`blockingOwner`, a single numerator/denominator/percentage/fraction metric,
+and stored-versus-derived provenance. A terminal selected root is authoritative:
+it is reported as 100% walk-ready and stale child evidence does not reopen it.
+Role-distinct relationship edges remain separate; only exact semantic
+duplicates share an identity.
 
 An invalid override is ignored as a whole. Bundled defaults remain active and
 every response reports `registry-override-invalid`. Overrides cannot change

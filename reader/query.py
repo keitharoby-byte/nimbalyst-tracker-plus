@@ -22,6 +22,9 @@ FIELD_OPERATORS: dict[str, set[str]] = {
     "tags": {"contains", "containsAny", "containsAll"}, "archived": {"eq"},
     "launchKey": {"eq", "in"}, "scheduleHealth": {"eq", "in"},
     "executionConstraint": {"eq", "in"},
+    "walkStage": {"eq", "neq", "in", "notIn", "exists"},
+    "buildState": {"eq", "neq", "in", "notIn", "exists"},
+    "readiness": {"eq", "neq", "in", "notIn", "exists"},
     "created": {"before", "after", "exists"}, "updated": {"before", "after", "exists"},
     "startDate": {"before", "after", "exists"}, "dueDate": {"before", "after", "exists"},
     "targetDate": {"before", "after", "exists"}, "forecastDate": {"before", "after", "exists"},
@@ -39,7 +42,10 @@ def expand_saved_query(saved: Any, registry: Mapping[str, Any], expected_kind: s
     if not isinstance(saved, Mapping) or not isinstance(saved.get("id"), str):
         raise ReaderError("SAVED_QUERY_PARAMS_INVALID", "savedQuery requires an id and params object.")
     query = registry["savedQueries"].get(saved["id"])
-    if not isinstance(query, Mapping) or query.get("kind") != expected_kind:
+    accepted_kinds = {expected_kind}
+    if expected_kind == "traversal":
+        accepted_kinds.add("composed")
+    if not isinstance(query, Mapping) or query.get("kind") not in accepted_kinds:
         raise ReaderError("SAVED_QUERY_NOT_FOUND", "The requested saved query does not exist for this tool.")
     params = saved.get("params", {})
     required_params = set(query.get("params", []))

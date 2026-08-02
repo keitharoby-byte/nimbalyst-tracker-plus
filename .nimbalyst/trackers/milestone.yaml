@@ -159,6 +159,29 @@ fields:
     required: true
   - name: gate
     type: string
+  - name: walkStage
+    type: select
+    options:
+      - value: local-verifiable
+        label: Local verifiable
+      - value: production-only
+        label: Production only
+      - value: mixed
+        label: Mixed
+  - name: buildState
+    type: select
+    options:
+      - value: not-started
+        label: Not started
+      - value: in-build
+        label: In build
+      - value: build-complete
+        label: Build complete
+  - name: requiredRuntimeAvailable
+    type: boolean
+  - name: acceptanceCriteria
+    type: array
+    itemType: string
   - name: pullRequestNumber
     type: number
     min: 1
