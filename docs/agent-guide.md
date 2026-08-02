@@ -414,6 +414,10 @@ quality, security, and documentation examples.
 Create `.nimbalyst/tracker-plus.queries.json` in the workspace. Query objects
 add or replace templates by ID; `null` disables a bundled template:
 
+For a copy-ready catalog containing neutral predicate, traversal, and composed
+examples, start with
+[`examples/tracker-plus.queries.json`](../examples/tracker-plus.queries.json).
+
 ```json
 {
   "version": 1,

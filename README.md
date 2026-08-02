@@ -14,11 +14,11 @@ upgrade in place despite the broader Tracker+ name.
 
 ## Screenshots
 
-![Tracker+ relationship graph, state inspector, and timeline bars across Light, Dark, Crystal Dark, and Midnight Orchid](docs/screenshots/tracker-plus-theme-audit.png)
+![Tracker+ current relationship graph with typed-edge legend, launch filter, validation summary, and workflow-aware nodes](docs/screenshots/tracker-plus-theme-audit.png)
 
 <p align="center">
-  <img src="docs/screenshots/tracker-plus-light.png" width="49%" alt="Tracker+ in the Nimbalyst Light theme">
-  <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ in the Midnight Orchid extension theme">
+  <img src="docs/screenshots/tracker-plus-light.png" width="49%" alt="Tracker+ 0.7 timeline viewer in the Nimbalyst Light theme">
+  <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
 ## What's new in 0.7.0
@@ -189,6 +189,9 @@ documents every bundled template, role expansion, copy-paste invocation,
 external query-catalog rules, caps, and failure behavior.
 The dedicated [role guide](docs/roles.md) explains query roles versus graph
 roles and includes neutral examples plus a ready-to-copy installer registry.
+The [installation guide](docs/installation.md#workspace-configuration) and
+[`examples/tracker-plus.queries.json`](examples/tracker-plus.queries.json)
+provide copy-ready external predicate, traversal, and composed query templates.
 
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.

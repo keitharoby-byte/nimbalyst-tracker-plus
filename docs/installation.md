@@ -32,6 +32,30 @@ For agent operation after installation, use [agent-guide.md](agent-guide.md).
 It distinguishes read-only orientation, native tracker mutations, and generated
 projection/report files.
 
+## Workspace configuration
+
+Tracker+ does not require source changes for installation-specific roles or
+saved queries:
+
+1. Copy
+   [`examples/tracker-plus.registry.roles.json`](../examples/tracker-plus.registry.roles.json)
+   to `.nimbalyst/tracker-plus.registry.json`, then edit or remove the neutral
+   example roles to match owner aliases and attention tags already used in the
+   workspace.
+2. Copy
+   [`examples/tracker-plus.queries.json`](../examples/tracker-plus.queries.json)
+   to `.nimbalyst/tracker-plus.queries.json`, then edit the predicate,
+   traversal, or composed templates as needed.
+3. Invoke each configured saved query once and inspect its echoed definition,
+   `validation`, `page`, `watermark`, registry hash, and query fingerprint
+   before an agent acts on the result.
+
+Query roles are selectors, not permissions or assignments. Relationship
+`scopeRole` and `contributionRole` values classify graph edges instead of
+people. See [roles.md](roles.md) for delivery, quality, security, and
+documentation examples and [agent-guide.md](agent-guide.md#managing-saved-queries-without-code-changes)
+for the complete catalog contract and failure behavior.
+
 The installed extension and `.ntimeline` editor are available across Nimbalyst
 projects. Each call is still scoped to the workspace associated with that AI
 session. Install the supplied `launch`, `timeline-item`, `milestone`, and
