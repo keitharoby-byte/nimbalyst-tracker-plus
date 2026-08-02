@@ -45,7 +45,14 @@ const RELATIONSHIP_TYPES = new Set<RelationshipType>([
 const SCHEDULE_HEALTH = new Set<ScheduleHealth>(['on-track', 'at-risk', 'late']);
 const EXECUTION_CONSTRAINTS = new Set<ExecutionConstraint>(['clear', 'waiting', 'blocked', 'paused']);
 const RISK_LEVELS = new Set<RiskLevel>(['low', 'medium', 'high', 'critical']);
-const RELATIONSHIP_STATES = new Set<RelationshipState>(['active', 'cleared', 'superseded']);
+const RELATIONSHIP_STATES = new Set<RelationshipState>([
+  'active',
+  'cleared',
+  'blocked',
+  'retired',
+  'superseded',
+  'unknown',
+]);
 const DEPENDENCY_MODES = new Set<DependencyMode>(['finish-to-start', 'start-to-start', 'finish-to-finish', 'start-to-finish']);
 const HARDNESS_LEVELS = new Set<RelationshipHardness>(['hard-serial', 'shared-resource', 'soft-coordination']);
 

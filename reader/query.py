@@ -42,11 +42,36 @@ def expand_saved_query(saved: Any, registry: Mapping[str, Any], expected_kind: s
     if not isinstance(query, Mapping) or query.get("kind") != expected_kind:
         raise ReaderError("SAVED_QUERY_NOT_FOUND", "The requested saved query does not exist for this tool.")
     params = saved.get("params", {})
-    if not isinstance(params, Mapping) or set(params) != set(query.get("params", [])):
+    required_params = set(query.get("params", []))
+    optional_params = set(query.get("optionalParams", []))
+    if (
+        not isinstance(params, Mapping)
+        or not required_params.issubset(params)
+        or set(params) - required_params - optional_params
+    ):
         raise ReaderError("SAVED_QUERY_PARAMS_INVALID", "Saved query parameters are missing or unexpected.")
-    clean: dict[str, str] = {}
-    for name in query.get("params", []):
+    clean: dict[str, Any] = {}
+    for name in [*query.get("params", []), *query.get("optionalParams", [])]:
+        if name not in params:
+            continue
         value = params.get(name)
+        if name == "launchKeys":
+            if (
+                not isinstance(value, list)
+                or not 1 <= len(value) <= registry["caps"]["traverseRootsMax"]
+                or not all(isinstance(entry, str) and entry.strip() and len(entry.strip()) <= 100 for entry in value)
+            ):
+                raise ReaderError("SAVED_QUERY_PARAMS_INVALID", "launchKeys must be a bounded non-empty string array.")
+            normalized = [entry.strip() for entry in value]
+            if len({entry.casefold() for entry in normalized}) != len(normalized):
+                raise ReaderError("SAVED_QUERY_PARAMS_INVALID", "launchKeys must not contain duplicates.")
+            clean[name] = normalized
+            continue
+        if name == "includeUnscoped":
+            if not isinstance(value, bool):
+                raise ReaderError("SAVED_QUERY_PARAMS_INVALID", "includeUnscoped must be a boolean.")
+            clean[name] = value
+            continue
         if not isinstance(value, str) or not value.strip():
             raise ReaderError("SAVED_QUERY_PARAMS_INVALID", f"Saved query parameter {name} must be a non-empty string.")
         value = value.strip()

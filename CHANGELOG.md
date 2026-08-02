@@ -4,6 +4,39 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.6.0 - 2026-08-02
+
+- Scope traversal validation to the eligible selected graph and declared
+  boundary evidence, so retired, archived, filtered, and out-of-boundary edges
+  cannot contaminate a bounded result.
+- Preserve `blocked` and `retired` relationship lifecycle states without
+  promoting them to active, and fail closed on unknown selected states.
+- Define semantic relationship identity with source, type, target,
+  `scopeRole`, and `contributionRole`; retain role-distinct native edges and
+  reject only exact selected duplicates with stable relationship IDs.
+- Canonicalize relationship target type, title, and issue key from the current
+  native target row rather than stale embedded edge metadata.
+- Make unresolved roots and selected edges terminal, and make declared
+  validation/truncation conditions return no usable graph result.
+- Add the versioned `dispatch-eligible-work-v1` traversal with optional
+  `roleId`, `launchKeys[]`, and `includeUnscoped` parameters.
+- Return deterministic included/excluded dispatch receipts covering packet and
+  QA revisions, launch/milestone/train ancestry, dependency clearing, holds,
+  database routes, PR/session/worktree custody, survivor/collision state,
+  scope and query fingerprints, and explicit reasons.
+- Order candidates by cleared hard-dependency topology, launch/critical-path
+  priority, native priority, durable `precedes` evidence, and stable issue key;
+  train metadata never limits capacity.
+- Fail dispatch closed on warnings, validation errors, unresolved evidence,
+  incomplete required evidence, cycles, or response truncation, returning no
+  candidates or launch totals in the terminal receipt.
+- Move all dispatch workflow, type, QA, launch, scope, route, hold, custody,
+  survivor, collision, and unscoped admission policy into the safe workspace
+  registry override.
+- Advance the normalized schema adapter to v3 and the bundled registry to v2
+  so receipts make the lifecycle/identity and dispatch contract change
+  explicit.
+
 ## 0.5.0 - 2026-07-30
 
 - Add an optional `selector.launchTags` generator contract to

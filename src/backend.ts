@@ -185,7 +185,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
   },
   {
     name: TOOL_TRAVERSE,
-    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved launch query, returning members, edges, boundary nodes, validation, rollups, and provenance. This tool never writes tracker data.',
+    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved query. Includes the fail-closed dispatch-eligible-work-v1 candidate contract with auditable inclusion and exclusion receipts. This tool never writes tracker data.',
     scope: 'global',
     inputSchema: {
       type: 'object',

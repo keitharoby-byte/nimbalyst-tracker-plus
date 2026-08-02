@@ -29,6 +29,12 @@ fields:
       - value: cleared
         label: Cleared
         color: '#10b981'
+      - value: blocked
+        label: Blocked
+        color: '#ef4444'
+      - value: retired
+        label: Retired
+        color: '#78716c'
       - value: superseded
         label: Superseded
         color: '#64748b'
@@ -47,6 +53,12 @@ fields:
       - value: depends-on
         label: Depends on
         color: '#ef4444'
+      - value: part-of-launch
+        label: Part of launch
+        color: '#14b8a6'
+      - value: governs
+        label: Governs
+        color: '#0f766e'
       - value: contributes-to
         label: Contributes to
         color: '#8b5cf6'
@@ -56,6 +68,15 @@ fields:
       - value: evidences
         label: Evidences
         color: '#94a3b8'
+      - value: precedes
+        label: Precedes
+        color: '#f97316'
+      - value: enables
+        label: Enables
+        color: '#84cc16'
+      - value: coordinates-with
+        label: Coordinates with
+        color: '#eab308'
       - value: implements
         label: Implements
         color: '#22c55e'
@@ -114,6 +135,21 @@ fields:
   - name: owner
     type: user
     displayInline: true
+  - name: scopeRole
+    type: select
+    options:
+      - value: core
+        label: Core
+      - value: supporting
+        label: Supporting
+      - value: acceptance
+        label: Acceptance
+      - value: review
+        label: Review
+      - value: evidence
+        label: Evidence
+      - value: dependency-only
+        label: Dependency only
   - name: contributionRole
     type: select
     default: secondary

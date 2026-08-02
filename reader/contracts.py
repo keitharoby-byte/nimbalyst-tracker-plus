@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_ADAPTER = "tracker-items-normalized-timeline-v2"
+SCHEMA_ADAPTER = "tracker-items-normalized-timeline-v3"
 REQUIRED_COLUMNS = (
     "id",
     "issue_key",

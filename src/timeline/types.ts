@@ -18,7 +18,13 @@ export type RelationshipType =
   | 'related';
 export type DependencyMode = 'finish-to-start' | 'start-to-start' | 'finish-to-finish' | 'start-to-finish';
 export type RelationshipHardness = 'hard-serial' | 'shared-resource' | 'soft-coordination';
-export type RelationshipState = 'active' | 'cleared' | 'superseded';
+export type RelationshipState =
+  | 'active'
+  | 'cleared'
+  | 'blocked'
+  | 'retired'
+  | 'superseded'
+  | 'unknown';
 export type ValidationSeverity = 'error' | 'warning' | 'info';
 
 export interface TimelineItem {

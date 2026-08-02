@@ -556,6 +556,373 @@ class QueryTraverseTests(unittest.TestCase):
             self.reader.traverse_graph({**base, "failOn": {"truncation": True, "validation": False}})
         self.assertEqual(raised.exception.code, "RESULT_TRUNCATED")
 
+    def test_selected_traversal_filters_retired_and_preserves_role_identity(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._link(
+                connection,
+                "link-member-supporting",
+                "REL-SUPPORTING",
+                "member-1",
+                "launch-1",
+                "part-of-launch",
+                scope_role="supporting",
+            )
+            self._link(
+                connection,
+                "link-member-retired-duplicate",
+                "REL-RETIRED",
+                "member-1",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+                status="retired",
+            )
+            self._link(
+                connection,
+                "link-outside-duplicate-a",
+                "REL-OUT-A",
+                "alpha-seed",
+                "shared-evidence",
+                "related",
+            )
+            self._link(
+                connection,
+                "link-outside-duplicate-b",
+                "REL-OUT-B",
+                "alpha-seed",
+                "shared-evidence",
+                "related",
+            )
+            stale_target = {
+                "title": "REL-STALE-TYPE",
+                "sourceItem": {"itemId": "member-1"},
+                "targetItem": {
+                    "itemId": "prior",
+                    "trackerType": "stale-type",
+                    "title": "Stale title",
+                },
+                "relationshipType": "related",
+                "status": "active",
+            }
+            self._insert(
+                connection,
+                "link-stale-target-type",
+                "REL-STALE-TYPE",
+                "timeline-link",
+                stale_target,
+            )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["FFP-1"],
+            "membership": {
+                "relationshipTypes": ["part-of-launch"],
+                "direction": "incoming",
+                "status": ["active"],
+                "maxDepth": 1,
+            },
+            "expand": {
+                "relationshipTypes": ["related"],
+                "direction": "both",
+                "maxDepth": 1,
+                "edgeWhere": {"status": ["active"]},
+                "externalEndpointBehavior": "boundary",
+            },
+            "failOn": {"truncation": True, "validation": True},
+        })
+        relationship_ids = {edge["id"] for edge in result["edges"]}
+        self.assertIn("link-member-1", relationship_ids)
+        self.assertIn("link-member-supporting", relationship_ids)
+        self.assertNotIn("link-member-retired-duplicate", relationship_ids)
+        self.assertNotIn("link-outside-duplicate-a", relationship_ids)
+        self.assertNotIn("link-outside-duplicate-b", relationship_ids)
+        stale = next(
+            edge for edge in result["edges"]
+            if edge["id"] == "link-stale-target-type"
+        )
+        self.assertEqual(stale["targetType"], "milestone")
+        self.assertEqual(result["validation"]["state"], "pass")
+
+        snapshot = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 500,
+        })
+        retired = next(
+            edge for edge in snapshot["relationships"]
+            if edge["id"] == "link-member-retired-duplicate"
+        )
+        self.assertEqual(retired["state"], "retired")
+
+    def test_exact_selected_duplicate_is_terminal_when_validation_is_declared(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._link(
+                connection,
+                "link-member-exact-duplicate",
+                "REL-EXACT-DUP",
+                "member-1",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "roots": ["FFP-1"],
+                "membership": {
+                    "relationshipTypes": ["part-of-launch"],
+                    "direction": "incoming",
+                    "status": ["active"],
+                    "maxDepth": 1,
+                },
+                "failOn": {"truncation": True, "validation": True},
+            })
+        self.assertEqual(raised.exception.code, "VALIDATION_FAILED")
+        findings = raised.exception.details["validation"]["findings"]
+        duplicate = next(
+            finding for finding in findings
+            if finding["code"] == "duplicate-active-membership"
+        )
+        self.assertEqual(
+            duplicate["relationshipIds"],
+            ["link-member-1", "link-member-exact-duplicate"],
+        )
+
+    def test_dispatch_saved_query_is_multi_launch_deterministic_and_auditable(self) -> None:
+        ready = {
+            "status": "ready",
+            "owner": "pm",
+            "packetRevision": "rev-7",
+            "currentRevision": "rev-7",
+            "qaEvidenceRevision": "rev-7",
+            "qaStatus": "passed",
+            "holdState": "clear",
+            "databaseRouteState": "approved",
+            "custodyState": "vacant",
+            "survivorState": "unique",
+            "collisionState": "clear",
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "launch-2", "LAUNCH-FFP-2", "launch", {
+                "title": "Second launch",
+                "launchKey": "FFP-2",
+                "status": "active",
+                "owner": "PM",
+                "audience": ["internal"],
+                "scopeRevision": "2",
+                "entryCriteria": [{}],
+                "exitCriteria": [{}],
+            })
+            self._insert(connection, "dispatch-a", "NIM-DISPATCH-A", "task", {
+                **ready,
+                "title": "Dependent packet",
+                "priority": "critical",
+            })
+            self._insert(connection, "dispatch-b", "NIM-DISPATCH-B", "bug", {
+                **ready,
+                "title": "Prerequisite packet",
+                "priority": "low",
+            })
+            self._insert(connection, "dispatch-excluded", "NIM-DISPATCH-X", "task", {
+                **ready,
+                "title": "Collision packet",
+                "collisionState": "collision",
+            })
+            self._link(
+                connection,
+                "dispatch-membership-a",
+                "REL-DISPATCH-A",
+                "dispatch-a",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            self._link(
+                connection,
+                "dispatch-membership-b",
+                "REL-DISPATCH-B",
+                "dispatch-b",
+                "launch-2",
+                "part-of-launch",
+                scope_role="core",
+            )
+            self._link(
+                connection,
+                "dispatch-membership-x",
+                "REL-DISPATCH-X",
+                "dispatch-excluded",
+                "launch-2",
+                "part-of-launch",
+                scope_role="core",
+            )
+            self._link(
+                connection,
+                "dispatch-cleared-dependency",
+                "REL-DISPATCH-DEP",
+                "dispatch-a",
+                "dispatch-b",
+                "depends-on",
+                hardness="hard-serial",
+                status="cleared",
+                clearing_condition="QA evidence accepted",
+            )
+            self._link(
+                connection,
+                "dispatch-retired-duplicate",
+                "REL-DISPATCH-RETIRED",
+                "dispatch-a",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+                status="retired",
+            )
+            connection.commit()
+
+        request = {
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {
+                    "roleId": "project-manager",
+                    "launchKeys": ["FFP-2", "FFP-1"],
+                    "includeUnscoped": False,
+                },
+            },
+        }
+        first = self.reader.traverse_graph(request)
+        second = self.reader.traverse_graph(request)
+        self.assertEqual(
+            [node["id"] for node in first["nodes"]],
+            ["dispatch-b", "dispatch-a"],
+        )
+        self.assertEqual(
+            first["query"]["queryFingerprint"],
+            second["query"]["queryFingerprint"],
+        )
+        self.assertEqual(
+            [receipt["itemId"] for receipt in first["receipts"]],
+            [receipt["itemId"] for receipt in second["receipts"]],
+        )
+        self.assertEqual(first["page"]["candidateCount"], 2)
+        self.assertEqual(
+            first["page"]["inspectedCount"],
+            len(first["receipts"]),
+        )
+        excluded = {
+            receipt["itemId"]: receipt["exclusionReasons"]
+            for receipt in first["excluded"]
+        }
+        self.assertIn("collision-or-overlap", excluded["dispatch-excluded"])
+        dispatch_a = next(
+            receipt for receipt in first["receipts"]
+            if receipt["itemId"] == "dispatch-a"
+        )
+        self.assertEqual(
+            dispatch_a["dependencyEvidence"][0]["relationshipId"],
+            "dispatch-cleared-dependency",
+        )
+        self.assertTrue(dispatch_a["dependencyEvidence"][0]["cleared"])
+        self.assertEqual(
+            dispatch_a["ancestry"]["launches"][0]["relationshipIds"],
+            ["dispatch-membership-a"],
+        )
+        self.assertNotIn(
+            "dispatch-retired-duplicate",
+            {edge["id"] for edge in first["edges"]},
+        )
+        self.assertEqual(first["validation"]["state"], "pass")
+
+    def test_dispatch_incomplete_evidence_returns_terminal_empty_receipt(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "dispatch-incomplete", "NIM-DISPATCH-I", "task", {
+                "title": "Incomplete packet",
+                "status": "ready",
+                "owner": "pm",
+                "packetRevision": "rev-1",
+            })
+            self._link(
+                connection,
+                "dispatch-membership-incomplete",
+                "REL-DISPATCH-I",
+                "dispatch-incomplete",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {
+                    "id": "dispatch-eligible-work-v1",
+                    "params": {"launchKeys": ["FFP-1"]},
+                },
+            })
+        self.assertEqual(
+            raised.exception.code,
+            "DISPATCH_EVIDENCE_INCOMPLETE",
+        )
+        receipt = raised.exception.details["receipt"]
+        self.assertEqual(receipt["candidates"], [])
+        self.assertNotIn("launchTotals", receipt)
+        self.assertNotIn("totalCount", receipt["page"])
+        self.assertEqual(
+            receipt["incompleteEvidence"][0]["itemId"],
+            "dispatch-incomplete",
+        )
+
+    def test_dispatch_unscoped_requires_explicit_registry_admission(self) -> None:
+        policy = dict(self.reader._registry["dispatchPolicy"])
+        policy["admittedUnscopedTypes"] = ["bug"]
+        override_path = (
+            Path(self.workspace)
+            / ".nimbalyst"
+            / "tracker-plus.registry.json"
+        )
+        override_path.write_text(
+            json.dumps({"dispatchPolicy": policy}),
+            encoding="utf-8",
+        )
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "dispatch-unscoped", "NIM-DISPATCH-U", "bug", {
+                "title": "Admitted unscoped bug",
+                "status": "ready",
+                "packetRevision": "rev-u",
+                "currentRevision": "rev-u",
+                "qaEvidenceRevision": "rev-u",
+                "qaStatus": "passed",
+                "holdState": "clear",
+                "databaseRouteState": "approved",
+                "custodyState": "vacant",
+                "survivorState": "unique",
+                "collisionState": "clear",
+            })
+            connection.commit()
+        excluded = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"includeUnscoped": False},
+            },
+        })
+        self.assertNotIn(
+            "dispatch-unscoped",
+            {node["id"] for node in excluded["nodes"]},
+        )
+        included = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"includeUnscoped": True},
+            },
+        })
+        self.assertIn(
+            "dispatch-unscoped",
+            {node["id"] for node in included["nodes"]},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover
     from contracts import ReaderError  # type: ignore[no-redef]
 
 LOCKED_OVERRIDE_KEYS = {"relationshipTypes", "scopeRoles", "executableTypes", "caps", "version"}
-OVERRIDABLE_KEYS = {"terminalStatuses", "roles", "savedQueries"}
+OVERRIDABLE_KEYS = {"terminalStatuses", "roles", "savedQueries", "dispatchPolicy"}
 REQUIRED_CAPS = {
     "queryLimitDefault", "queryLimitMax", "clauseDepthMax", "clauseCountMax",
     "listValuesMax", "textTermMax", "traverseNodesMax", "traverseEdgesMax",
@@ -40,9 +40,31 @@ def _validate_saved_queries(value: Any) -> bool:
             return False
         if not _string_list(query.get("params", []), nonempty=False):
             return False
+        if not _string_list(query.get("optionalParams", []), nonempty=False):
+            return False
+        if set(query.get("params", [])).intersection(query.get("optionalParams", [])):
+            return False
         if not isinstance(query.get("definition"), dict):
             return False
     return True
+
+
+def _validate_dispatch_policy(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    list_keys = {
+        "dispatchableTypes", "readyStatuses", "qaPassStatuses",
+        "eligibleLaunchStatuses", "membershipRoles", "contributionRoles",
+        "admittedUnscopedTypes", "admissibleDatabaseRoutes",
+        "clearHoldStates", "clearCustodyStates", "survivorStates",
+        "clearCollisionStates",
+    }
+    if set(value) != list_keys:
+        return False
+    return all(
+        _string_list(value.get(key), nonempty=key != "admittedUnscopedTypes")
+        for key in list_keys
+    )
 
 
 def _validate_registry(value: Any) -> None:
@@ -69,6 +91,8 @@ def _validate_registry(value: Any) -> None:
         raise ValueError("caps are incomplete or invalid")
     if not _validate_saved_queries(value.get("savedQueries")):
         raise ValueError("savedQueries are invalid")
+    if not _validate_dispatch_policy(value.get("dispatchPolicy")):
+        raise ValueError("dispatchPolicy is invalid")
 
 
 def _load_bundled() -> dict[str, Any]:
@@ -98,6 +122,8 @@ def _validate_override(value: Any) -> None:
                 raise ValueError("override role is invalid")
     if "savedQueries" in value and not _validate_saved_queries(value["savedQueries"]):
         raise ValueError("override savedQueries are invalid")
+    if "dispatchPolicy" in value and not _validate_dispatch_policy(value["dispatchPolicy"]):
+        raise ValueError("override dispatchPolicy is invalid")
 
 
 def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool, str | None, str]:
@@ -116,6 +142,8 @@ def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool
             for key in ("roles", "savedQueries"):
                 if key in override:
                     effective[key].update(copy.deepcopy(override[key]))
+            if "dispatchPolicy" in override:
+                effective["dispatchPolicy"] = copy.deepcopy(override["dispatchPolicy"])
             _validate_registry(effective)
             override_active = True
         except (OSError, json.JSONDecodeError, ValueError):

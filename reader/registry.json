@@ -1,8 +1,22 @@
 {
-  "version": 1,
+  "version": 2,
   "terminalStatuses": ["done", "completed", "achieved", "closed", "shipped", "implemented", "released", "cancelled", "retired"],
   "scopeRoles": ["core", "supporting", "acceptance", "review", "evidence", "dependency-only"],
   "executableTypes": ["task", "timeline-item", "devops-item", "prediclear-item", "automation", "mr", "merge-request", "pull-request", "change-request"],
+  "dispatchPolicy": {
+    "dispatchableTypes": ["task", "bug"],
+    "readyStatuses": ["ready", "dispatch-ready"],
+    "qaPassStatuses": ["passed"],
+    "eligibleLaunchStatuses": ["active", "ready", "in-progress"],
+    "membershipRoles": ["core"],
+    "contributionRoles": ["primary"],
+    "admittedUnscopedTypes": [],
+    "admissibleDatabaseRoutes": ["none", "not-required", "ready", "approved"],
+    "clearHoldStates": ["clear", "none"],
+    "clearCustodyStates": ["clear", "none", "vacant"],
+    "survivorStates": ["survivor", "unique"],
+    "clearCollisionStates": ["clear", "none"]
+  },
   "relationshipTypes": {
     "part-of-launch": { "membership": true, "canBlock": false, "requiresScopeRole": true, "forbidsHardness": true },
     "governs": { "membership": false, "canBlock": false },
@@ -45,6 +59,22 @@
           { "field": "updated", "direction": "desc" }
         ],
         "limit": 100, "includeTotalCount": true
+      }
+    },
+    "dispatch-eligible-work-v1": {
+      "version": 1,
+      "kind": "traversal",
+      "params": [],
+      "optionalParams": ["roleId", "launchKeys", "includeUnscoped"],
+      "label": "Fail-closed dispatch candidates across eligible launches",
+      "definition": {
+        "mode": "dispatch-eligible-work-v1",
+        "failOn": {
+          "truncation": true,
+          "validation": true,
+          "warning": true,
+          "unresolvedEvidence": true
+        }
       }
     },
     "launch-scope": {
