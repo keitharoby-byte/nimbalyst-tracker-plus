@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.7.0 - 2026-08-02
+
+- Add registry-supported composed saved queries that select bounded roots with
+  a predicate and then expand typed relationships in one deterministic result.
+- Add the generic `walk-ready-milestones` template with native walk/build
+  fields, evidence-backed readiness, predecessor controls, a consistent
+  readiness metric, and stored-versus-derived provenance.
+- Preserve explicit `unknown` readiness when native stage, acceptance,
+  implementation evidence, or runtime availability is missing; never infer a
+  positive build state from titles, tags, progress, or confidence fields.
+- Treat a terminal selected walk root as authoritative and prevent stale
+  nonterminal child evidence from reopening its gate.
+- Restore legacy-versus-native relationship suppression with role-aware
+  semantic identity, preventing saved role queries from crashing while keeping
+  scope-role and contribution-role parallels distinct.
+- Apply dispatch archive, workflow, role, and scope admission before detailed
+  receipt materialization so normal large workspaces remain within response
+  bounds.
+- Add compact pre-admission reason totals and a stable exclusion fingerprint
+  while keeping fail-closed terminal receipts free of candidates and launch
+  totals.
+- Add in-process, helper-boundary, external-catalog, composed traversal,
+  evidence, terminal-root, selection-overflow, and large-workspace regressions.
+
 ## 0.6.2 - 2026-08-02
 
 - Package every native reader generation with a versioned manifest containing

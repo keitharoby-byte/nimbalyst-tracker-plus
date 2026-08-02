@@ -4,7 +4,7 @@ This extension exposes bounded tracker-comment context and read-only timeline /
 milestone projections through MCP. It also contributes the `.ntimeline` custom
 editor.
 
-- Extension ID: `com.prediclear.nimbalyst-native-tracker-comments`
+- The stable extension ID is declared in `manifest.json`.
 - Source: `src/` and `reader/`
 - Generated output: `dist/` (never edit by hand)
 - Runtime permissions: read/query backend `mcp-server-register`; projection backend additionally `workspace-files`

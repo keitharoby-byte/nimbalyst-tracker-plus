@@ -39,6 +39,42 @@
         }
       }
     },
+    "walk-ready-milestones": {
+      "version": 1,
+      "kind": "composed",
+      "params": [],
+      "label": "Evidence-backed walk readiness for explicitly staged roots",
+      "definition": {
+        "mode": "composed-v1",
+        "select": {
+          "where": {
+            "all": [
+              { "field": "archived", "op": "eq", "value": false },
+              { "field": "walkStage", "op": "exists", "value": true },
+              { "field": "buildState", "op": "eq", "value": "build-complete" }
+            ]
+          },
+          "sort": [
+            { "field": "priority", "direction": "desc" },
+            { "field": "updated", "direction": "desc" }
+          ],
+          "limit": 8,
+          "includeTotalCount": true
+        },
+        "traverse": {
+          "expand": {
+            "relationshipTypes": ["depends-on", "implements", "evidences"],
+            "direction": "both",
+            "maxDepth": 1,
+            "edgeWhere": { "status": ["active", "blocked", "cleared"] },
+            "externalEndpointBehavior": "boundary"
+          },
+          "limits": { "maxNodes": 64, "maxEdges": 128 }
+        },
+        "projection": "walk-readiness-v1",
+        "failOn": { "truncation": true, "validation": false }
+      }
+    },
     "launch-scope": {
       "version": 1,
       "kind": "traversal",

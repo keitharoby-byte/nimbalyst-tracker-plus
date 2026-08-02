@@ -816,10 +816,24 @@ class NativeTrackerReader:
                 "where": where,
                 "sort": sort,
                 "implicit": implicit,
+                "limit": limit,
+                "cursor": expanded.get("cursor"),
                 "includeArchived": include_archived,
                 "includeRelationshipRecords": include_links,
+                "includeTotalCount": include_total,
             },
         }
+        result["query"]["queryFingerprint"] = self._stable_fingerprint(
+            {
+                "query": result["query"],
+                "schemaAdapter": SCHEMA_ADAPTER,
+                "schemaFingerprint": fingerprint,
+                "registryVersion": self._registry["version"],
+                "registryHash": self._registry_hash,
+                "sourceItemCount": int(source_counts[0] or 0),
+                "sourceRelationshipCount": int(source_counts[1] or 0),
+            }
+        )
         return self._fit_graph_result(result, sort)
 
     def traverse_graph(self, params: Mapping[str, Any]) -> dict[str, Any]:
@@ -843,6 +857,13 @@ class NativeTrackerReader:
             if definition.get("mode") == "dispatch-eligible-work-v1":
                 return self._dispatch_eligible_work(
                     workspace_path,
+                    query_echo,
+                    started,
+                )
+            if definition.get("mode") == "composed-v1":
+                return self._composed_saved_traversal(
+                    workspace_path,
+                    definition,
                     query_echo,
                     started,
                 )
@@ -1092,6 +1113,346 @@ class NativeTrackerReader:
             raise ReaderError("VALIDATION_FAILED", "Traversal validation failed.", {"validation": fitted["validation"]})
         return fitted
 
+    def _composed_saved_traversal(
+        self,
+        workspace_path: str,
+        definition: Mapping[str, Any],
+        query_echo: Mapping[str, Any],
+        started: float,
+    ) -> dict[str, Any]:
+        """Select bounded roots, then traverse them as one saved-query result."""
+        allowed = {"mode", "select", "traverse", "projection", "failOn"}
+        if set(definition) - allowed:
+            raise ReaderError("QUERY_INVALID", "The composed saved query contains unknown fields.")
+        select = definition.get("select")
+        traverse = definition.get("traverse", {})
+        projection = definition.get("projection")
+        fail_on = definition.get("failOn", {})
+        if not isinstance(select, Mapping) or not isinstance(traverse, Mapping):
+            raise ReaderError("QUERY_INVALID", "The composed saved query requires select and traverse objects.")
+        if (
+            not isinstance(fail_on, Mapping)
+            or set(fail_on) - {"truncation", "validation"}
+            or not all(isinstance(value, bool) for value in fail_on.values())
+        ):
+            raise ReaderError("QUERY_INVALID", "The composed saved query failOn policy is invalid.")
+        allowed_select = {
+            "where", "sort", "limit", "includeArchived",
+            "includeRelationshipRecords", "includeTotalCount",
+        }
+        if set(select) - allowed_select or "where" not in select:
+            raise ReaderError("QUERY_INVALID", "The composed root selector is invalid.")
+        allowed_traverse = {"membership", "expand", "nodeWhere", "limits"}
+        if set(traverse) - allowed_traverse:
+            raise ReaderError("QUERY_INVALID", "The composed traversal stage is invalid.")
+
+        selection = self.query_items(
+            {
+                "workspacePath": workspace_path,
+                **dict(select),
+                "includeArchived": False,
+                "includeRelationshipRecords": False,
+                "includeTotalCount": True,
+            }
+        )
+        root_ids = [str(node["id"]) for node in selection["nodes"]]
+        root_cap = self._registry["caps"]["traverseRootsMax"]
+        selection_incomplete = bool(
+            selection["page"].get("nextCursor")
+            or selection["page"].get("truncated")
+            or len(root_ids) > root_cap
+        )
+        if selection_incomplete and fail_on.get("truncation", False):
+            raise ReaderError(
+                "RESULT_TRUNCATED",
+                "The composed root selection exceeded its bounded traversal capacity.",
+                {
+                    "selectedRootCount": len(root_ids),
+                    "rootLimit": root_cap,
+                    "selectionComplete": False,
+                },
+            )
+        if (
+            selection["validation"]["state"] != "pass"
+            and fail_on.get("validation", False)
+        ):
+            raise ReaderError(
+                "VALIDATION_FAILED",
+                "Composed root selection validation failed.",
+                {"validation": selection["validation"]},
+            )
+
+        selection_receipt = {
+            "totalCount": selection["page"].get("totalCount"),
+            "selectedRootCount": len(root_ids),
+            "complete": not selection_incomplete,
+            "validationState": selection["validation"]["state"],
+            "queryFingerprint": selection["query"].get("queryFingerprint"),
+        }
+        if not root_ids:
+            result = {
+                "nodes": [],
+                "edges": [],
+                "boundaryNodes": [],
+                "page": {
+                    "totalCount": 0,
+                    "returnedCount": 0,
+                    "nextCursor": None,
+                    "truncated": False,
+                },
+                "validation": selection["validation"],
+                "watermark": selection["watermark"],
+                "query": {
+                    **dict(query_echo),
+                    "mode": "composed-v1",
+                    "selection": selection_receipt,
+                    "resolvedRoots": [],
+                    "failOn": dict(fail_on),
+                },
+            }
+            result["query"]["queryFingerprint"] = self._stable_fingerprint(
+                {
+                    "query": result["query"],
+                    "registryHash": self._registry_hash,
+                    "schemaFingerprint": result["watermark"]["schemaFingerprint"],
+                }
+            )
+            return result
+
+        traversal = self.traverse_graph(
+            {
+                "workspacePath": workspace_path,
+                "roots": root_ids[:root_cap],
+                **dict(traverse),
+                "failOn": {
+                    "truncation": bool(fail_on.get("truncation", False)),
+                    "validation": bool(fail_on.get("validation", False)),
+                },
+            }
+        )
+        if projection == "walk-readiness-v1":
+            self._apply_walk_readiness_projection(
+                traversal,
+                set(root_ids[:root_cap]),
+            )
+        elif projection is not None:
+            raise ReaderError("QUERY_INVALID", "The composed saved query projection is unsupported.")
+
+        traversal["query"] = {
+            **dict(query_echo),
+            "mode": "composed-v1",
+            "selection": selection_receipt,
+            "resolvedRoots": traversal["query"]["resolvedRoots"],
+            "membership": traversal["query"]["membership"],
+            "expand": traversal["query"]["expand"],
+            "nodeWhere": traversal["query"]["nodeWhere"],
+            "limits": traversal["query"]["limits"],
+            "failOn": dict(fail_on),
+            "projection": projection,
+        }
+        traversal["query"]["queryFingerprint"] = self._stable_fingerprint(
+            {
+                "query": traversal["query"],
+                "schemaAdapter": SCHEMA_ADAPTER,
+                "schemaFingerprint": traversal["watermark"]["schemaFingerprint"],
+                "registryVersion": self._registry["version"],
+                "registryHash": self._registry_hash,
+            }
+        )
+        traversal["watermark"]["durationMs"] = round(
+            (time.perf_counter() - started) * 1000,
+            2,
+        )
+        fitted = self._fit_graph_result(traversal)
+        if fitted["page"]["truncated"] and fail_on.get("truncation", False):
+            raise ReaderError("RESULT_TRUNCATED", "The composed graph response was truncated.")
+        if fitted["validation"]["state"] != "pass" and fail_on.get("validation", False):
+            raise ReaderError(
+                "VALIDATION_FAILED",
+                "Composed traversal validation failed.",
+                {"validation": fitted["validation"]},
+            )
+        return fitted
+
+    def _apply_walk_readiness_projection(
+        self,
+        result: dict[str, Any],
+        root_ids: set[str],
+    ) -> None:
+        """Attach evidence-backed walk controls without inferring from labels."""
+        items = {
+            str(item["id"]): item
+            for item in [*result["nodes"], *result["boundaryNodes"]]
+        }
+        findings = list(result["validation"]["findings"])
+        terminal = {
+            str(value).casefold()
+            for value in self._registry["terminalStatuses"]
+        }
+        for root_id in sorted(root_ids):
+            root = items.get(root_id)
+            if root is None:
+                continue
+            workflow_terminal = str(root.get("status") or "").casefold() in terminal
+            predecessor_edges = sorted(
+                (
+                    edge
+                    for edge in result["edges"]
+                    if edge.get("sourceId") == root_id
+                    and edge.get("relationshipType") == "depends-on"
+                    and edge.get("hardness") == "hard-serial"
+                    and edge.get("state") in {"active", "blocked"}
+                ),
+                key=lambda edge: edge["id"],
+            )
+            implementing_edges = sorted(
+                (
+                    edge
+                    for edge in result["edges"]
+                    if edge.get("targetId") == root_id
+                    and edge.get("relationshipType") in {"implements", "evidences"}
+                    and edge.get("state") == "active"
+                    and edge.get("sourceId") in items
+                ),
+                key=lambda edge: edge["id"],
+            )
+            provenance = dict(root.get("walkReadinessProvenance") or {})
+            stored_build = (
+                (provenance.get("buildState") or {}).get("storedValue")
+                if isinstance(provenance.get("buildState"), Mapping)
+                else None
+            )
+            walk_stage = root.get("walkStage")
+            acceptance_present = bool(provenance.get("acceptanceContentPresent"))
+            runtime_available = root.get("requiredRuntimeAvailable")
+
+            if workflow_terminal:
+                build_state = "build-complete"
+                readiness = "walk-ready"
+                predecessor_rows: list[dict[str, Any]] = []
+                numerator, denominator = 1, 1
+            else:
+                predecessor_rows = [
+                    {
+                        "itemId": edge["targetId"],
+                        "issueKey": items.get(edge["targetId"], {}).get("issueKey"),
+                        "relationshipId": edge["id"],
+                        "state": edge["state"],
+                        "clearingCondition": edge.get("clearingCondition"),
+                        "ownerLabel": edge.get("ownerLabel"),
+                    }
+                    for edge in predecessor_edges
+                ]
+                if stored_build == "build-complete" and implementing_edges:
+                    build_state = "build-complete"
+                elif stored_build in {"in-build", "not-started"}:
+                    build_state = stored_build
+                else:
+                    build_state = "unknown"
+                gates = [
+                    build_state == "build-complete",
+                    not predecessor_rows,
+                    runtime_available is True,
+                ]
+                numerator, denominator = sum(gates), len(gates)
+                if (
+                    walk_stage == "unknown"
+                    or build_state == "unknown"
+                    or runtime_available is None
+                    or not acceptance_present
+                ):
+                    readiness = "unknown"
+                elif predecessor_rows:
+                    readiness = "blocked"
+                elif build_state != "build-complete" or runtime_available is not True:
+                    readiness = "not-ready"
+                else:
+                    readiness = "walk-ready"
+
+            root["buildState"] = build_state
+            root["readiness"] = readiness
+            root["serialPredecessor"] = predecessor_rows[0] if predecessor_rows else None
+            root["serialPredecessors"] = predecessor_rows
+            root["blockingCondition"] = (
+                predecessor_rows[0].get("clearingCondition")
+                if predecessor_rows
+                else None
+            )
+            root["blockingOwner"] = (
+                predecessor_rows[0].get("ownerLabel")
+                if predecessor_rows
+                else None
+            )
+            root["walkReadiness"] = {
+                "numerator": numerator,
+                "denominator": denominator,
+                "percentage": round((numerator / denominator) * 100, 2),
+                "fraction": f"{numerator}/{denominator}",
+            }
+            root["walkReadinessProvenance"] = {
+                **provenance,
+                "workflowTerminal": workflow_terminal,
+                "implementingEvidence": [
+                    {
+                        "itemId": edge["sourceId"],
+                        "issueKey": items[edge["sourceId"]].get("issueKey"),
+                        "relationshipId": edge["id"],
+                        "relationshipType": edge["relationshipType"],
+                    }
+                    for edge in implementing_edges
+                ],
+                "buildState": {
+                    "storedValue": stored_build,
+                    "derivedValue": build_state,
+                    "derived": build_state != stored_build,
+                },
+                "readiness": {
+                    "storedValue": (
+                        (provenance.get("readiness") or {}).get("storedValue")
+                        if isinstance(provenance.get("readiness"), Mapping)
+                        else None
+                    ),
+                    "derivedValue": readiness,
+                    "derived": True,
+                },
+                "metricBasis": [
+                    "build-complete",
+                    "hard-serial-predecessors-cleared",
+                    "required-runtime-available",
+                ] if not workflow_terminal else ["terminal-root"],
+            }
+            if workflow_terminal:
+                continue
+            if walk_stage == "unknown":
+                findings.append(self._finding(
+                    "walk-stage-unknown",
+                    "warning",
+                    "A selected walk root has no supported native walkStage value.",
+                    item_ids=[root_id],
+                ))
+            if not acceptance_present:
+                findings.append(self._finding(
+                    "walk-acceptance-content-missing",
+                    "warning",
+                    "A selected walk root has no native gate or acceptance content.",
+                    item_ids=[root_id],
+                ))
+            if stored_build == "build-complete" and not implementing_edges:
+                findings.append(self._finding(
+                    "walk-build-evidence-missing",
+                    "warning",
+                    "Stored build-complete state has no resolved active implementing evidence.",
+                    item_ids=[root_id],
+                ))
+            if runtime_available is None:
+                findings.append(self._finding(
+                    "walk-runtime-availability-unknown",
+                    "warning",
+                    "Required runtime availability is not explicitly recorded.",
+                    item_ids=[root_id],
+                ))
+        result["validation"] = self._validation_block(findings)
+
     def _dispatch_eligible_work(
         self,
         workspace_path: str,
@@ -1236,6 +1597,7 @@ class NativeTrackerReader:
         selected_relationships: dict[str, dict[str, Any]] = {}
         validation_item_ids: set[str] = set()
         receipts: list[dict[str, Any]] = []
+        pre_admission_exclusions: list[dict[str, Any]] = []
         incomplete: list[dict[str, Any]] = []
         role_aliases = {
             alias.casefold()
@@ -1275,6 +1637,25 @@ class NativeTrackerReader:
                 and not launches
                 and not milestones
             )
+            admission_reasons: list[str] = []
+            if item.get("archived"):
+                admission_reasons.append("archived")
+            if str(item.get("workflow") or "").casefold() not in {
+                value.casefold() for value in policy["readyStatuses"]
+            }:
+                admission_reasons.append("workflow-not-dispatch-ready")
+            if role_id and str(item.get("ownerLabel") or "").casefold() not in role_aliases:
+                admission_reasons.append("role-mismatch")
+            if not scoped_to_selected and not unscoped_admitted:
+                admission_reasons.append("scope-not-admitted")
+            if admission_reasons:
+                pre_admission_exclusions.append({
+                    "itemId": item["id"],
+                    "issueKey": item.get("issueKey"),
+                    "reasons": sorted(set(admission_reasons)),
+                })
+                continue
+
             packet_revision = self._bounded_string(fields.get("packetRevision"), 200)
             current_revision = self._bounded_string(fields.get("currentRevision"), 200)
             is_current = fields.get("isCurrentRevision")
@@ -1288,16 +1669,6 @@ class NativeTrackerReader:
             failure_state = self._bounded_string(fields.get("failureState"), 100)
             superseded_by = self._bounded_string(fields.get("supersededBy"), 200)
             reasons: list[str] = []
-            if item.get("archived"):
-                reasons.append("archived")
-            if str(item.get("workflow") or "").casefold() not in {
-                value.casefold() for value in policy["readyStatuses"]
-            }:
-                reasons.append("workflow-not-dispatch-ready")
-            if role_id and str(item.get("ownerLabel") or "").casefold() not in role_aliases:
-                reasons.append("role-mismatch")
-            if not scoped_to_selected and not unscoped_admitted:
-                reasons.append("scope-not-admitted")
             if packet_revision is None:
                 reasons.append("packet-revision-missing")
             if not (
@@ -1350,13 +1721,7 @@ class NativeTrackerReader:
             if any(edge.get("state") in {"active", "blocked"} for edge in dependencies):
                 reasons.append("hard-dependency-unsatisfied")
 
-            evidence_required = (
-                not item.get("archived")
-                and str(item.get("workflow") or "").casefold()
-                in {value.casefold() for value in policy["readyStatuses"]}
-                and (scoped_to_selected or unscoped_admitted)
-                and (not role_id or "role-mismatch" not in reasons)
-            )
+            evidence_required = True
             missing_fields = [
                 name for name, value in {
                     "packetRevision": packet_revision,
@@ -1496,6 +1861,21 @@ class NativeTrackerReader:
             *self._dispatch_topology_findings(receipts, selected_edge_list),
         ]
         validation = self._validation_block(findings)
+        admission_reason_counts: dict[str, int] = {}
+        for exclusion in pre_admission_exclusions:
+            for reason in exclusion["reasons"]:
+                admission_reason_counts[reason] = admission_reason_counts.get(reason, 0) + 1
+        admission_receipt = {
+            "sourceDispatchableCount": len(source_items),
+            "detailedInspectionCount": len(receipts),
+            "preAdmissionExcludedCount": len(pre_admission_exclusions),
+            "preAdmissionReasonCounts": dict(sorted(admission_reason_counts.items())),
+            "preAdmissionFingerprint": self._stable_fingerprint(pre_admission_exclusions),
+            "rule": (
+                "Detailed receipts are materialized only after workflow, role, "
+                "scope, and archive admission."
+            ),
+        }
         query_receipt = {
             **query_echo,
             "expandedParameters": {
@@ -1526,6 +1906,7 @@ class NativeTrackerReader:
                 "registryHash": self._registry_hash,
                 "sourceItemCount": len(item_rows),
                 "sourceRelationshipCount": len(link_db_rows),
+                "preAdmissionFingerprint": admission_receipt["preAdmissionFingerprint"],
             }
         )
         watermark = self._watermark(
@@ -1543,6 +1924,7 @@ class NativeTrackerReader:
             "validation": validation,
             "watermark": watermark,
             "candidates": [],
+            "admission": admission_receipt,
         }
         if validation["state"] != "pass":
             raise ReaderError(
@@ -1606,7 +1988,12 @@ class NativeTrackerReader:
             ),
             "excluded": sorted(
                 [
-                    receipt for receipt in receipts
+                    {
+                        "itemId": receipt["itemId"],
+                        "issueKey": receipt.get("issueKey"),
+                        "exclusionReasons": receipt["exclusionReasons"],
+                    }
+                    for receipt in receipts
                     if not receipt["included"]
                 ],
                 key=lambda receipt: (
@@ -1615,10 +2002,13 @@ class NativeTrackerReader:
                 ),
             ),
             "launchTotals": dict(sorted(launch_totals.items())),
+            "admission": admission_receipt,
             "page": {
                 "totalCount": len(nodes),
                 "candidateCount": len(nodes),
-                "inspectedCount": len(receipts),
+                "inspectedCount": len(source_items),
+                "detailedReceiptCount": len(receipts),
+                "preAdmissionExcludedCount": len(pre_admission_exclusions),
                 "returnedCount": len(nodes),
                 "nextCursor": None,
                 "truncated": False,
@@ -2351,6 +2741,39 @@ class NativeTrackerReader:
             duration_days = max(1, round((due_ms - start_ms) / 86_400_000) + 1)
         launch_scope = self._bounded_string(fields.get("launchScope"), 40)
         pull_request_number, pull_request_url = self._pull_request_fields(fields, type_tags)
+        stored_walk_stage = self._bounded_string(fields.get("walkStage"), 40)
+        walk_stage = (
+            stored_walk_stage
+            if stored_walk_stage in {"local-verifiable", "production-only", "mixed"}
+            else "unknown"
+        )
+        stored_build_state = self._bounded_string(fields.get("buildState"), 40)
+        build_state = (
+            stored_build_state
+            if stored_build_state in {"build-complete", "in-build", "not-started"}
+            else "unknown"
+        )
+        stored_readiness = self._bounded_string(fields.get("readiness"), 40)
+        readiness = (
+            stored_readiness
+            if stored_readiness in {"walk-ready", "blocked", "not-ready"}
+            else "unknown"
+        )
+        runtime_available = fields.get("requiredRuntimeAvailable")
+        if not isinstance(runtime_available, bool):
+            runtime_available = None
+        acceptance_content_present = bool(
+            self._bounded_string(fields.get("gate"), 200)
+            or (
+                isinstance(fields.get("exitCriteria"), list)
+                and fields.get("exitCriteria")
+            )
+            or (
+                isinstance(fields.get("acceptanceCriteria"), list)
+                and fields.get("acceptanceCriteria")
+            )
+            or self._bounded_string(fields.get("acceptanceCriteria"), 2_000)
+        )
         return {
             "id": str(row["id"]),
             "issueKey": row["issue_key"] if isinstance(row["issue_key"], str) else None,
@@ -2380,6 +2803,33 @@ class NativeTrackerReader:
             "technicalUncertainty": self._bounded_string(fields.get("technicalUncertainty"), 40),
             "capacityPressure": self._bounded_string(fields.get("capacityPressure"), 40),
             "gate": self._bounded_string(fields.get("gate"), 200),
+            "walkStage": walk_stage,
+            "buildState": build_state,
+            "readiness": readiness,
+            "requiredRuntimeAvailable": runtime_available,
+            "walkReadinessProvenance": {
+                "walkStage": {
+                    "sourceField": "walkStage",
+                    "storedValue": stored_walk_stage,
+                    "derived": False,
+                },
+                "buildState": {
+                    "sourceField": "buildState",
+                    "storedValue": stored_build_state,
+                    "derived": False,
+                },
+                "readiness": {
+                    "sourceField": "readiness",
+                    "storedValue": stored_readiness,
+                    "derived": False,
+                },
+                "requiredRuntime": {
+                    "sourceField": "requiredRuntimeAvailable",
+                    "storedValue": runtime_available,
+                    "derived": False,
+                },
+                "acceptanceContentPresent": acceptance_content_present,
+            },
             "launchKey": self._bounded_string(fields.get("launchKey"), 100),
             "tags": [self._bounded_string(value, 100) for value in fields.get("tags", []) if self._bounded_string(value, 100)] if isinstance(fields.get("tags"), list) else [],
             "actualDate": self._date_string(fields.get("actualDate")),
@@ -2514,8 +2964,16 @@ class NativeTrackerReader:
                 edge["targetType"] = items_by_id[target_id]["primaryType"]
             edges.append(edge)
 
-        if link_rows:
-            return edges, findings
+        explicit_keys = {
+            (
+                str(edge.get("sourceId") or ""),
+                str(edge.get("relationshipType") or ""),
+                str(edge.get("targetId") or ""),
+                str(edge.get("scopeRole") or ""),
+                str(edge.get("contributionRole") or ""),
+            )
+            for edge in edges
+        }
 
         legacy_specs = {
             "blockers": ("depends-on", False, "hard-serial"),
@@ -2535,7 +2993,14 @@ class NativeTrackerReader:
                         if reverse
                         else (item["id"], target["itemId"])
                     )
-                    key = (source_id, relationship_type, target_id)
+                    contribution_role = "primary" if field == "milestone" else None
+                    key = (
+                        source_id,
+                        relationship_type,
+                        target_id,
+                        "",
+                        contribution_role or "",
+                    )
                     if key in explicit_keys:
                         continue
                     if relationship_type == "related":
@@ -2566,7 +3031,7 @@ class NativeTrackerReader:
                             "clearingCondition": None,
                             "ownerLabel": None,
                             "primaryContribution": field == "milestone",
-                            "contributionRole": "primary" if field == "milestone" else None,
+                            "contributionRole": contribution_role,
                             "scopeRole": None,
                             "entryEvidenceIds": [],
                             "exitEvidenceIds": [],
