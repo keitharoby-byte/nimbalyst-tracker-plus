@@ -7,6 +7,8 @@ All notable changes to this project are documented in this file.
 - Add a copy-ready external query catalog covering predicate, traversal, and
   composed templates, and link it from installation, agent, and release
   documentation.
+- Refresh the README graph and light/dark timeline screenshots from the current
+  0.7 viewer, and advance the bundled sample projections to 0.7 provenance.
 
 ## 0.7.0 - 2026-08-02
 
