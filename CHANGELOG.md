@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.6.2 - 2026-08-02
+
+- Package every native reader generation with a versioned manifest containing
+  the extension, adapter, and registry versions plus SHA-256 asset hashes.
+- Start each helper from a verified immutable temporary snapshot so a running
+  process remains on one coherent generation during live extension updates.
+- Retry boundedly while an install is in progress and return
+  `READER_RESTART_REQUIRED` with version, path, hash, and validation-cause
+  diagnostics instead of reporting a mixed bundle as `REGISTRY_INVALID`.
+- Cache the verified bundled registry for the lifetime of the reader process
+  while continuing to load safe workspace overrides per request.
+- Expose verified reader-bundle provenance in source and watermark receipts,
+  and add package, mismatch, and immutable-snapshot regression tests.
+
 ## 0.6.1 - 2026-08-02
 
 - Add a dedicated role guide that distinguishes query-role matching from

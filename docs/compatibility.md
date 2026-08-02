@@ -4,7 +4,7 @@
 
 - Validation date: 2026-08-02
 - Nimbalyst: 0.71.3 packaged build
-- Extension: Tracker+ 0.6.0
+- Extension: Tracker+ 0.6.2
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows
@@ -34,6 +34,19 @@ The effective registry combines:
 Registry version, effective hash, query version, and override state appear in
 result receipts. Workspace query changes do not require rebuilding the
 extension.
+
+Native reader assets are generation-locked. `bundle-manifest.json` records the
+extension, adapter, and registry versions and the SHA-256 hash of every reader
+asset. A helper starts only from a verified immutable snapshot. During a live
+update it either continues on its already-loaded generation or starts on the
+complete new generation; it never intentionally combines the two.
+
+If the host-visible install directory does not settle on one complete
+generation within the bounded startup window, tools fail closed with
+`READER_RESTART_REQUIRED`. The diagnostic includes the manifest path,
+generation/version identity, validation cause, and expected/actual asset hash
+when available. Reloading the extension is sufficient; tracker rows and
+workspace overrides do not need to be changed.
 
 ## Retest triggers
 

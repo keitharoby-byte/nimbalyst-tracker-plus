@@ -9,6 +9,12 @@ import type {
   ReaderProtocolResponse,
 } from './contracts';
 import { BridgeTransportError, NativeTrackerError } from './errors';
+import {
+  prepareReaderSnapshot,
+  ReaderBundleError,
+  removeReaderSnapshot,
+  type ReaderSnapshot,
+} from './readerBundle';
 
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_INPUT_LINE_BYTES = 64 * 1024;
@@ -30,6 +36,7 @@ export class PythonBridge {
   private stdoutBuffer = Buffer.alloc(0);
   private readonly pending = new Map<string, PendingRequest>();
   private starting: Promise<void> | null = null;
+  private snapshot: ReaderSnapshot | null = null;
 
   constructor(
     private readonly extensionPath: string,
@@ -68,6 +75,9 @@ export class PythonBridge {
     }
 
     this.rejectAll(new BridgeTransportError('The native tracker helper stopped.'));
+    const snapshot = this.snapshot;
+    this.snapshot = null;
+    await removeReaderSnapshot(snapshot);
   }
 
   private async requestOnce(method: ReaderMethod, params: Record<string, unknown>): Promise<unknown> {
@@ -122,7 +132,20 @@ export class PythonBridge {
   }
 
   private async startHelper(): Promise<void> {
-    const scriptPath = path.join(this.extensionPath, 'dist', 'reader', 'server.py');
+    await removeReaderSnapshot(this.snapshot);
+    try {
+      this.snapshot = await prepareReaderSnapshot(this.extensionPath);
+    } catch (error) {
+      if (error instanceof ReaderBundleError) {
+        throw new NativeTrackerError({
+          code: error.code,
+          message: error.message,
+          details: error.details,
+        });
+      }
+      throw error;
+    }
+    const scriptPath = path.join(this.snapshot.directory, 'server.py');
     if (!existsSync(scriptPath)) {
       throw new BridgeTransportError('The packaged native tracker reader is missing. Rebuild the extension.');
     }
@@ -132,13 +155,20 @@ export class PythonBridge {
     for (const candidate of candidates) {
       try {
         await this.spawnCandidate(candidate, scriptPath);
-        this.log('info', `[tracker-plus] helper.start command=${candidate.command}`);
+        this.log(
+          'info',
+          `[tracker-plus] helper.start command=${candidate.command}`
+          + ` generation=${this.snapshot.manifest.generationId.slice(0, 12)}`
+          + ` extension=${this.snapshot.manifest.extensionVersion}`,
+        );
         return;
       } catch (error) {
         lastError = error;
       }
     }
 
+    await removeReaderSnapshot(this.snapshot);
+    this.snapshot = null;
     throw new NativeTrackerError({
       code: 'PYTHON_NOT_FOUND',
       message: 'Python 3 is required to read native tracker comments. Install Python 3 and reload the extension.',
@@ -153,7 +183,12 @@ export class PythonBridge {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(candidate.command, [...candidate.prefixArgs, '-I', '-B', scriptPath], {
         cwd: path.dirname(scriptPath),
-        env: { ...process.env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1' },
+        env: {
+          ...process.env,
+          PYTHONUTF8: '1',
+          PYTHONDONTWRITEBYTECODE: '1',
+          TRACKER_PLUS_REQUIRE_BUNDLE_MANIFEST: '1',
+        },
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
