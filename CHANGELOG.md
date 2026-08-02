@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.6.1 - 2026-08-02
+
+- Add a dedicated role guide that distinguishes query-role matching from
+  relationship scope and contribution roles.
+- Document neutral delivery, quality, security, and documentation role
+  examples, matching behavior, safety guidance, and copy-paste queries.
+- Add a ready-to-copy workspace role registry so installers can adopt or edit
+  example roles without rebuilding the extension.
+
 ## 0.6.0 - 2026-08-02
 
 - Scope traversal validation to the eligible selected graph and declared
