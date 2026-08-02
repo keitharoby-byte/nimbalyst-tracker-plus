@@ -36,6 +36,39 @@ class RegistryTests(unittest.TestCase):
                 self.assertIsNotNone(error)
                 self.assertEqual(registry["caps"]["queryLimitMax"], 200)
 
+    def test_external_query_catalog_can_replace_add_and_remove_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".nimbalyst").mkdir()
+            catalog = {
+                "version": 1,
+                "queries": {
+                    "launch-open-reviews": None,
+                    "workspace-ready-items": {
+                        "version": 1,
+                        "kind": "predicate",
+                        "params": [],
+                        "label": "Workspace-defined ready items",
+                        "definition": {
+                            "where": {
+                                "field": "status",
+                                "op": "eq",
+                                "value": "ready",
+                            }
+                        },
+                    },
+                },
+            }
+            (root / ".nimbalyst" / "tracker-plus.queries.json").write_text(
+                json.dumps(catalog),
+                encoding="utf-8",
+            )
+            registry, active, error, _registry_hash = effective_registry(root)
+            self.assertTrue(active)
+            self.assertIsNone(error)
+            self.assertNotIn("launch-open-reviews", registry["savedQueries"])
+            self.assertIn("workspace-ready-items", registry["savedQueries"])
+
 
 if __name__ == "__main__":
     unittest.main()

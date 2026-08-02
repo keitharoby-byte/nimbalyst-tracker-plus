@@ -236,18 +236,18 @@ class NativeTrackerReader:
         rows = rows[: parsed["maxItems"]]
         items: list[dict[str, Any]] = []
         raw_fields_by_id: dict[str, dict[str, Any]] = {}
-        project_state_revision: str | None = None
+        source_revision: str | None = None
 
         for _row, fields in link_rows:
-            project_state_revision = project_state_revision or self._bounded_string(
-                fields.get("projectStateRevision"), 200
+            source_revision = source_revision or self._bounded_string(
+                fields.get("sourceRevision"), 200
             )
 
         for row in rows:
             data = self._parse_data(row)
             fields = self._flatten_custom_fields(data)
-            project_state_revision = project_state_revision or self._bounded_string(
-                fields.get("projectStateRevision"), 200
+            source_revision = source_revision or self._bounded_string(
+                fields.get("sourceRevision"), 200
             )
             item = self._timeline_item(row, fields)
             if not parsed["includeUnscheduled"] and not self._is_scheduled(item):
@@ -276,7 +276,7 @@ class NativeTrackerReader:
             edge["targetInSnapshot"] = edge["targetId"] in item_ids
 
         source = self._source(fingerprint, schema_discovery)
-        source["projectStateRevision"] = project_state_revision or "unavailable"
+        source["sourceRevision"] = source_revision or "unavailable"
         source["relationshipSource"] = (
             "native timeline-link rows" if link_rows else "legacy tracker fields"
         )
@@ -499,15 +499,15 @@ class NativeTrackerReader:
                 {"validation": validation_block},
             )
 
-        project_state_revision: str | None = None
+        source_revision: str | None = None
         for item_id in sorted(closure_ids):
-            project_state_revision = project_state_revision or self._bounded_string(
-                raw_fields_by_id[item_id].get("projectStateRevision"), 200
+            source_revision = source_revision or self._bounded_string(
+                raw_fields_by_id[item_id].get("sourceRevision"), 200
             )
         link_fields_by_id = {str(row["id"]): fields for row, fields in link_rows}
         for edge in selected_edges:
-            project_state_revision = project_state_revision or self._bounded_string(
-                link_fields_by_id[edge["id"]].get("projectStateRevision"), 200
+            source_revision = source_revision or self._bounded_string(
+                link_fields_by_id[edge["id"]].get("sourceRevision"), 200
             )
         for item in items:
             item.pop("archived", None)
@@ -523,7 +523,7 @@ class NativeTrackerReader:
             "schemaFingerprint": fingerprint,
             "registryVersion": self._registry["version"],
             "registryHash": self._registry_hash,
-            "projectStateRevision": project_state_revision or "unavailable",
+            "sourceRevision": source_revision or "unavailable",
         }
         output_hash = hashlib.sha256(
             json.dumps(semantic_projection, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -531,7 +531,7 @@ class NativeTrackerReader:
         generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         source = self._source(fingerprint, schema_discovery)
         source.update({
-            "projectStateRevision": project_state_revision or "unavailable",
+            "sourceRevision": source_revision or "unavailable",
             "relationshipSource": "native timeline-link rows",
             "relationshipRows": len(link_db_rows),
             "sourceItemCount": len(item_rows),
@@ -628,7 +628,7 @@ class NativeTrackerReader:
             schema_discovery if isinstance(schema_discovery, Mapping) else None,
         )
         source.update({
-            "projectStateRevision": "unavailable",
+            "sourceRevision": "unavailable",
             "relationshipSource": "native timeline-link rows",
             "relationshipRows": watermark["sourceRelationshipCount"],
             "sourceItemCount": watermark["sourceItemCount"],
@@ -837,6 +837,12 @@ class NativeTrackerReader:
                 raise ReaderError("QUERY_INVALID", "savedQuery and roots cannot be combined.")
             definition, query_echo = expand_saved_query(params["savedQuery"], self._registry, "traversal")
             expanded = {**definition, "workspacePath": workspace_path}
+            if definition.get("mode") == "dispatch-eligible-work-v1":
+                return self._dispatch_eligible_work(
+                    workspace_path,
+                    query_echo,
+                    started,
+                )
         roots = expanded.get("roots")
         caps = self._registry["caps"]
         if not isinstance(roots, list) or not 1 <= len(roots) <= caps["traverseRootsMax"] or not all(isinstance(value, str) and value.strip() for value in roots):
@@ -887,9 +893,13 @@ class NativeTrackerReader:
         items_by_id = {item["id"]: item for item in all_items}
         link_rows = [(row, self._flatten_custom_fields(self._parse_data(row))) for row in link_db_rows]
         edges, normalization_findings = self._normalized_relationships(all_items, fields_by_id, link_rows)
+        traversal_edges = [
+            edge for edge in edges
+            if edge.get("state") not in {"retired", "unknown"}
+        ]
         edges_by_source: dict[str, list[dict[str, Any]]] = {}
         edges_by_target: dict[str, list[dict[str, Any]]] = {}
-        for edge in edges:
+        for edge in traversal_edges:
             edges_by_source.setdefault(edge["sourceId"], []).append(edge)
             edges_by_target.setdefault(edge["targetId"], []).append(edge)
         for values in [*edges_by_source.values(), *edges_by_target.values()]:
@@ -980,11 +990,10 @@ class NativeTrackerReader:
                 if predicate_matches(row_by_id[item_id], fields_by_id[item_id], node_where, self._registry)
             }
         kept_ids = set(resolved_roots) | kept_member_ids | boundary_ids
-        candidate_edges = [edge for edge in edges if edge["id"] in selected_edge_ids]
+        candidate_edges = [edge for edge in traversal_edges if edge["id"] in selected_edge_ids]
         findings = [
             *self._registry_findings(),
             *self._schema_discovery_findings(schema_discovery),
-            *normalization_findings,
         ]
         tolerated_archived_ids: set[str] = set()
         for edge in candidate_edges:
@@ -994,10 +1003,25 @@ class NativeTrackerReader:
                 if tolerated:
                     tolerated_archived_ids.add(endpoint)
                 if item is None or (item.get("archived") and not tolerated):
-                    findings.append(self._finding("orphan-endpoint", "error", f"Relationship {edge.get('issueKey') or edge['id']} has an unavailable endpoint.", item_ids=[endpoint], relationship_ids=[edge["id"]]))
+                    raise ReaderError(
+                        "UNRESOLVED_EDGE",
+                        "A selected traversal relationship has an unavailable endpoint.",
+                        {
+                            "relationshipId": edge["id"],
+                            "endpointId": endpoint,
+                            "resolvedRoots": resolved_roots,
+                        },
+                    )
         kept_ids = {item_id for item_id in kept_ids if not items_by_id[item_id].get("archived") or item_id in tolerated_archived_ids}
         selected_edges = [edge for edge in candidate_edges if edge["sourceId"] in kept_ids and edge["targetId"] in kept_ids]
+        selected_edge_ids = {edge["id"] for edge in selected_edges}
+        findings.extend(
+            finding for finding in normalization_findings
+            if selected_edge_ids.intersection(finding.get("relationshipIds", []))
+            or kept_ids.intersection(finding.get("itemIds", []))
+        )
         result_items = [items_by_id[item_id] for item_id in sorted(kept_ids)]
+        findings.extend(self._semantic_duplicate_findings(selected_edges))
         findings.extend(self._launch_findings(result_items, selected_edges))
         self._apply_launch_rollups(result_items, selected_edges)
         validation = self._validation_block(findings)
@@ -1019,7 +1043,7 @@ class NativeTrackerReader:
             truncated = True
         if truncated and fail_on.get("truncation", False):
             raise ReaderError("RESULT_TRUNCATED", "Traversal caps prevented a complete graph response.")
-        if validation["state"] == "fail" and fail_on.get("validation", False):
+        if validation["state"] != "pass" and fail_on.get("validation", False):
             raise ReaderError("VALIDATION_FAILED", "Traversal validation failed.", {"validation": validation})
         nodes = [items_by_id[item_id] for item_id in sorted(retained_ids - boundary_ids)]
         boundary_nodes = [items_by_id[item_id] for item_id in sorted(retained_ids & boundary_ids)]
@@ -1036,9 +1060,732 @@ class NativeTrackerReader:
                 started,
                 schema_discovery,
             ),
-            "query": {**query_echo, "roots": roots, "resolvedRoots": resolved_roots, "membership": membership, "expand": expand, "nodeWhere": node_where},
+            "query": {
+                **query_echo,
+                "roots": roots,
+                "resolvedRoots": resolved_roots,
+                "membership": membership,
+                "expand": expand,
+                "nodeWhere": node_where,
+                "limits": {"maxNodes": max_nodes, "maxEdges": max_edges},
+                "failOn": dict(fail_on),
+            },
         }
-        return self._fit_graph_result(result)
+        result["query"]["queryFingerprint"] = self._stable_fingerprint(
+            {
+                "query": result["query"],
+                "schemaAdapter": SCHEMA_ADAPTER,
+                "schemaFingerprint": fingerprint,
+                "registryVersion": self._registry["version"],
+                "registryHash": self._registry_hash,
+                "sourceItemCount": len(item_rows),
+                "sourceRelationshipCount": len(link_db_rows),
+            }
+        )
+        fitted = self._fit_graph_result(result)
+        if fitted["page"]["truncated"] and fail_on.get("truncation", False):
+            raise ReaderError("RESULT_TRUNCATED", "Traversal caps prevented a complete graph response.")
+        if fitted["validation"]["state"] != "pass" and fail_on.get("validation", False):
+            raise ReaderError("VALIDATION_FAILED", "Traversal validation failed.", {"validation": fitted["validation"]})
+        return fitted
+
+    def _dispatch_eligible_work(
+        self,
+        workspace_path: str,
+        query_echo: Mapping[str, Any],
+        started: float,
+    ) -> dict[str, Any]:
+        """Resolve one deterministic, fail-closed dispatch candidate set."""
+        policy = self._registry["dispatchPolicy"]
+        saved = query_echo["savedQuery"]
+        params = dict(saved.get("params", {}))
+        launch_keys = [str(value) for value in params.get("launchKeys", [])]
+        include_unscoped = bool(params.get("includeUnscoped", False))
+        role_id = params.get("roleId")
+        try:
+            with self._connect() as connection:
+                fingerprint = self._validate_schema(connection)
+                schema_discovery = self._schema_discovery(workspace_path, connection)
+                rows = connection.execute(
+                    """SELECT id, issue_key, type, data, content, archived, type_tags,
+                              created, updated
+                       FROM tracker_items
+                       WHERE workspace=? AND deleted_at IS NULL
+                       ORDER BY id ASC""",
+                    (workspace_path,),
+                ).fetchall()
+        except ReaderError:
+            raise
+        except sqlite3.OperationalError:
+            raise ReaderError(
+                "DATABASE_READ_FAILED",
+                "The Nimbalyst tracker database could not be queried safely.",
+            ) from None
+
+        item_rows = [row for row in rows if row["type"] != "timeline-link"]
+        link_db_rows = [row for row in rows if row["type"] == "timeline-link"]
+        items: list[dict[str, Any]] = []
+        fields_by_id: dict[str, dict[str, Any]] = {}
+        for row in item_rows:
+            fields = self._flatten_custom_fields(self._parse_data(row))
+            item = self._timeline_item(row, fields)
+            item["type"] = item["primaryType"]
+            item["archived"] = bool(row["archived"])
+            items.append(item)
+            fields_by_id[item["id"]] = fields
+        items_by_id = {item["id"]: item for item in items}
+        link_rows = [
+            (row, self._flatten_custom_fields(self._parse_data(row)))
+            for row in link_db_rows
+        ]
+        edges, normalization_findings = self._normalized_relationships(
+            items,
+            fields_by_id,
+            link_rows,
+        )
+        live_edges = [
+            edge for edge in edges
+            if edge.get("state") not in {"retired", "unknown"}
+        ]
+        eligible_launches = [
+            item for item in items
+            if not item.get("archived")
+            and item.get("primaryType") in {"launch", "milestone"}
+            and str(item.get("workflow") or "").casefold()
+            in {value.casefold() for value in policy["eligibleLaunchStatuses"]}
+        ]
+        launch_by_key: dict[str, list[dict[str, Any]]] = {}
+        for launch in eligible_launches:
+            key = str(launch.get("launchKey") or "").strip()
+            if key:
+                launch_by_key.setdefault(key.casefold(), []).append(launch)
+        selected_root_ids: set[str] = set()
+        for raw_key in launch_keys:
+            matches = launch_by_key.get(raw_key.casefold(), [])
+            if not matches:
+                raise ReaderError(
+                    "ROOT_NOT_FOUND",
+                    "A dispatch launch root was not found or is not eligible.",
+                    {"root": raw_key},
+                )
+            if len(matches) > 1:
+                raise ReaderError(
+                    "ROOT_AMBIGUOUS",
+                    "A dispatch launch root matched more than one eligible item.",
+                    {"root": raw_key},
+                )
+            selected_root_ids.add(matches[0]["id"])
+        if not launch_keys:
+            selected_root_ids = {item["id"] for item in eligible_launches}
+
+        active_scope_edges = [
+            edge for edge in live_edges
+            if edge.get("state") == "active"
+            and (
+                (
+                    edge.get("relationshipType") == "part-of-launch"
+                    and edge.get("scopeRole") in policy["membershipRoles"]
+                )
+                or (
+                    edge.get("relationshipType") == "contributes-to"
+                    and edge.get("contributionRole") in policy["contributionRoles"]
+                )
+            )
+        ]
+        outgoing_scope: dict[str, list[dict[str, Any]]] = {}
+        for edge in active_scope_edges:
+            outgoing_scope.setdefault(edge["sourceId"], []).append(edge)
+        for values in outgoing_scope.values():
+            values.sort(key=lambda edge: edge["id"])
+
+        def ancestry(item_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+            ancestry_edges: dict[str, dict[str, Any]] = {}
+            ancestry_nodes: dict[str, dict[str, Any]] = {}
+            frontier = [item_id]
+            seen = {item_id}
+            for _depth in range(4):
+                next_frontier: list[str] = []
+                for source_id in sorted(frontier):
+                    for edge in outgoing_scope.get(source_id, []):
+                        target_id = edge["targetId"]
+                        target = items_by_id.get(target_id)
+                        if target is None or target.get("archived"):
+                            ancestry_edges[edge["id"]] = edge
+                            continue
+                        ancestry_edges[edge["id"]] = edge
+                        ancestry_nodes[target_id] = target
+                        if target_id not in seen:
+                            seen.add(target_id)
+                            next_frontier.append(target_id)
+                frontier = next_frontier
+                if not frontier:
+                    break
+            return (
+                [ancestry_nodes[key] for key in sorted(ancestry_nodes)],
+                [ancestry_edges[key] for key in sorted(ancestry_edges)],
+            )
+
+        dispatch_types = set(policy["dispatchableTypes"])
+        source_items = [
+            item for item in items
+            if item.get("primaryType") in dispatch_types
+        ]
+        selected_relationships: dict[str, dict[str, Any]] = {}
+        validation_item_ids: set[str] = set()
+        receipts: list[dict[str, Any]] = []
+        incomplete: list[dict[str, Any]] = []
+        role_aliases = {
+            alias.casefold()
+            for alias in self._registry.get("roles", {})
+            .get(str(role_id), {})
+            .get("ownerAliases", [])
+        }
+        hard_dependencies_by_source: dict[str, list[dict[str, Any]]] = {}
+        for edge in live_edges:
+            if (
+                edge.get("relationshipType") == "depends-on"
+                and edge.get("hardness") == "hard-serial"
+            ):
+                hard_dependencies_by_source.setdefault(edge["sourceId"], []).append(edge)
+        for item in sorted(source_items, key=lambda value: value["id"]):
+            fields = fields_by_id[item["id"]]
+            ancestry_nodes, ancestry_edges = ancestry(item["id"])
+            launches = [
+                node for node in ancestry_nodes
+                if node.get("primaryType") == "launch"
+            ]
+            milestones = [
+                node for node in ancestry_nodes
+                if node.get("primaryType") == "milestone"
+            ]
+            trains = [
+                node for node in ancestry_nodes
+                if node.get("primaryType") == "train"
+            ]
+            scoped_to_selected = any(
+                node["id"] in selected_root_ids
+                for node in [*launches, *milestones]
+            )
+            unscoped_admitted = (
+                include_unscoped
+                and item["primaryType"] in policy["admittedUnscopedTypes"]
+                and not launches
+                and not milestones
+            )
+            packet_revision = self._bounded_string(fields.get("packetRevision"), 200)
+            current_revision = self._bounded_string(fields.get("currentRevision"), 200)
+            is_current = fields.get("isCurrentRevision")
+            qa_revision = self._bounded_string(fields.get("qaEvidenceRevision"), 200)
+            qa_status = self._bounded_string(fields.get("qaStatus"), 100)
+            hold_state = self._bounded_string(fields.get("holdState"), 100)
+            database_route = self._bounded_string(fields.get("databaseRouteState"), 100)
+            custody_state = self._bounded_string(fields.get("custodyState"), 100)
+            survivor_state = self._bounded_string(fields.get("survivorState"), 100)
+            collision_state = self._bounded_string(fields.get("collisionState"), 100)
+            failure_state = self._bounded_string(fields.get("failureState"), 100)
+            superseded_by = self._bounded_string(fields.get("supersededBy"), 200)
+            reasons: list[str] = []
+            if item.get("archived"):
+                reasons.append("archived")
+            if str(item.get("workflow") or "").casefold() not in {
+                value.casefold() for value in policy["readyStatuses"]
+            }:
+                reasons.append("workflow-not-dispatch-ready")
+            if role_id and str(item.get("ownerLabel") or "").casefold() not in role_aliases:
+                reasons.append("role-mismatch")
+            if not scoped_to_selected and not unscoped_admitted:
+                reasons.append("scope-not-admitted")
+            if packet_revision is None:
+                reasons.append("packet-revision-missing")
+            if not (
+                is_current is True
+                or (
+                    packet_revision is not None
+                    and current_revision is not None
+                    and packet_revision == current_revision
+                )
+            ):
+                reasons.append("packet-not-current-revision")
+            if qa_revision is None:
+                reasons.append("qa-evidence-revision-missing")
+            elif packet_revision is not None and qa_revision != packet_revision:
+                reasons.append("qa-evidence-revision-mismatch")
+            if str(qa_status or "").casefold() not in {
+                value.casefold() for value in policy["qaPassStatuses"]
+            }:
+                reasons.append("qa-not-passed")
+            if str(hold_state or "").casefold() not in {
+                value.casefold() for value in policy["clearHoldStates"]
+            }:
+                reasons.append("hold-not-clear")
+            if item.get("executionConstraint") in {"blocked", "paused", "waiting"}:
+                reasons.append(f"execution-{item['executionConstraint']}")
+            if str(database_route or "").casefold() not in {
+                value.casefold() for value in policy["admissibleDatabaseRoutes"]
+            }:
+                reasons.append("database-route-inadmissible")
+            if str(custody_state or "").casefold() not in {
+                value.casefold() for value in policy["clearCustodyStates"]
+            }:
+                reasons.append("custody-conflict-or-unknown")
+            if str(survivor_state or "").casefold() not in {
+                value.casefold() for value in policy["survivorStates"]
+            }:
+                reasons.append("survivor-state-ineligible")
+            if str(collision_state or "").casefold() not in {
+                value.casefold() for value in policy["clearCollisionStates"]
+            }:
+                reasons.append("collision-or-overlap")
+            if failure_state and failure_state.casefold() not in {"clear", "none", "passed"}:
+                reasons.append("failure-present")
+            if superseded_by:
+                reasons.append("superseded")
+            dependencies = sorted(
+                hard_dependencies_by_source.get(item["id"], []),
+                key=lambda edge: edge["id"],
+            )
+            if any(edge.get("state") in {"active", "blocked"} for edge in dependencies):
+                reasons.append("hard-dependency-unsatisfied")
+
+            evidence_required = (
+                not item.get("archived")
+                and str(item.get("workflow") or "").casefold()
+                in {value.casefold() for value in policy["readyStatuses"]}
+                and (scoped_to_selected or unscoped_admitted)
+                and (not role_id or "role-mismatch" not in reasons)
+            )
+            missing_fields = [
+                name for name, value in {
+                    "packetRevision": packet_revision,
+                    "qaEvidenceRevision": qa_revision,
+                    "qaStatus": qa_status,
+                    "holdState": hold_state,
+                    "databaseRouteState": database_route,
+                    "custodyState": custody_state,
+                    "survivorState": survivor_state,
+                    "collisionState": collision_state,
+                }.items()
+                if value is None
+            ]
+            if evidence_required and missing_fields:
+                incomplete.append(
+                    {
+                        "itemId": item["id"],
+                        "issueKey": item.get("issueKey"),
+                        "missingFields": missing_fields,
+                    }
+                )
+            if evidence_required:
+                validation_item_ids.add(item["id"])
+                for edge in [*ancestry_edges, *dependencies]:
+                    target = items_by_id.get(edge["targetId"])
+                    if target is None or target.get("archived"):
+                        raise ReaderError(
+                            "UNRESOLVED_EDGE",
+                            "A selected dispatch relationship has an unavailable endpoint.",
+                            {
+                                "relationshipId": edge["id"],
+                                "endpointId": edge["targetId"],
+                            },
+                        )
+                    selected_relationships[edge["id"]] = edge
+            relationship_ids = sorted(edge["id"] for edge in ancestry_edges)
+            scope_fingerprint = self._stable_fingerprint(
+                {
+                    "itemId": item["id"],
+                    "relationshipIds": relationship_ids,
+                    "launchKeys": launch_keys,
+                    "includeUnscoped": include_unscoped,
+                }
+            )
+            receipt = {
+                "itemId": item["id"],
+                "issueKey": item.get("issueKey"),
+                "included": not reasons,
+                "packetRevision": packet_revision,
+                "qaEvidenceRevision": qa_revision,
+                "ancestry": {
+                    "launches": self._dispatch_ancestry_rows(launches, ancestry_edges),
+                    "milestones": self._dispatch_ancestry_rows(milestones, ancestry_edges),
+                    "trains": self._dispatch_ancestry_rows(trains, ancestry_edges),
+                },
+                "dependencyEvidence": [
+                    {
+                        "relationshipId": edge["id"],
+                        "targetId": edge["targetId"],
+                        "state": edge.get("state"),
+                        "clearingCondition": edge.get("clearingCondition"),
+                        "cleared": edge.get("state") == "cleared",
+                    }
+                    for edge in dependencies
+                ],
+                "holdState": hold_state,
+                "databaseRouteState": database_route,
+                "custody": {
+                    "state": custody_state,
+                    "pullRequest": fields.get("pullRequestCustody"),
+                    "session": fields.get("sessionCustody"),
+                    "worktree": fields.get("worktreeCustody"),
+                },
+                "survivorState": survivor_state,
+                "collisionState": collision_state,
+                "scopeFingerprint": scope_fingerprint,
+                "eligibilityReasons": ["eligible"] if not reasons else [],
+                "exclusionReasons": sorted(set(reasons)),
+                "frontier": {
+                    "branch": self._bounded_string(fields.get("branch"), 500),
+                    "train": self._bounded_string(fields.get("train"), 200),
+                },
+            }
+            receipts.append(receipt)
+
+        for edge in live_edges:
+            if (
+                edge.get("relationshipType") == "precedes"
+                and edge.get("state") == "active"
+                and edge.get("sourceId") in validation_item_ids
+                and edge.get("targetId") in validation_item_ids
+            ):
+                selected_relationships[edge["id"]] = edge
+        selected_edge_list = [
+            selected_relationships[key] for key in sorted(selected_relationships)
+        ]
+        selected_item_ids = {
+            receipt["itemId"] for receipt in receipts
+        } | {
+            endpoint
+            for edge in selected_edge_list
+            for endpoint in (edge["sourceId"], edge["targetId"])
+        }
+        scoped_normalization_findings = [
+            finding for finding in normalization_findings
+            if set(finding.get("relationshipIds", [])).intersection(selected_relationships)
+        ]
+        validation_root_ids = (
+            selected_root_ids
+            if launch_keys
+            else {
+                str(edge["targetId"])
+                for edge in selected_edge_list
+                if edge.get("relationshipType") in {
+                    "part-of-launch",
+                    "contributes-to",
+                }
+            }
+        )
+        validation_node_ids = validation_item_ids | validation_root_ids | {
+            endpoint
+            for edge in selected_edge_list
+            for endpoint in (edge["sourceId"], edge["targetId"])
+        }
+        selected_nodes = [
+            items_by_id[item_id]
+            for item_id in sorted(validation_node_ids)
+            if item_id in items_by_id
+        ]
+        findings = [
+            *self._registry_findings(),
+            *self._schema_discovery_findings(schema_discovery),
+            *scoped_normalization_findings,
+            *self._semantic_duplicate_findings(selected_edge_list),
+            *self._validate_timeline(selected_nodes, selected_edge_list),
+            *self._launch_findings(selected_nodes, selected_edge_list),
+            *self._dispatch_topology_findings(receipts, selected_edge_list),
+        ]
+        validation = self._validation_block(findings)
+        query_receipt = {
+            **query_echo,
+            "expandedParameters": {
+                "roleId": role_id,
+                "launchKeys": launch_keys,
+                "includeUnscoped": include_unscoped,
+            },
+            "resolvedRoots": sorted(selected_root_ids),
+            "boundaryRules": {
+                "ancestryDepth": 4,
+                "membershipRoles": list(policy["membershipRoles"]),
+                "contributionRoles": list(policy["contributionRoles"]),
+                "retiredRelationshipsExcluded": True,
+                "archivedRecordsExcluded": True,
+            },
+            "pagination": {"cursor": None, "truncated": False},
+            "failOn": dict(query_echo.get("expanded", {}).get("failOn", {})),
+        }
+        query_receipt["queryFingerprint"] = self._stable_fingerprint(
+            {
+                "savedQuery": query_receipt["savedQuery"],
+                "expandedParameters": query_receipt["expandedParameters"],
+                "resolvedRoots": query_receipt["resolvedRoots"],
+                "boundaryRules": query_receipt["boundaryRules"],
+                "schemaAdapter": SCHEMA_ADAPTER,
+                "schemaFingerprint": fingerprint,
+                "registryVersion": self._registry["version"],
+                "registryHash": self._registry_hash,
+                "sourceItemCount": len(item_rows),
+                "sourceRelationshipCount": len(link_db_rows),
+            }
+        )
+        watermark = self._watermark(
+            fingerprint,
+            len(item_rows),
+            len(link_db_rows),
+            started,
+            schema_discovery,
+        )
+        terminal_receipt = {
+            "savedQuery": query_receipt["savedQuery"],
+            "queryFingerprint": query_receipt["queryFingerprint"],
+            "resolvedRoots": query_receipt["resolvedRoots"],
+            "page": {"truncated": False},
+            "validation": validation,
+            "watermark": watermark,
+            "candidates": [],
+        }
+        if validation["state"] != "pass":
+            raise ReaderError(
+                "VALIDATION_FAILED",
+                "Dispatch eligibility validation did not pass; no candidates or totals are trustworthy.",
+                {"receipt": terminal_receipt},
+            )
+        if incomplete:
+            terminal_receipt["incompleteEvidence"] = incomplete
+            raise ReaderError(
+                "DISPATCH_EVIDENCE_INCOMPLETE",
+                "Required dispatch evidence is incomplete; no candidates or totals are trustworthy.",
+                {"receipt": terminal_receipt},
+            )
+
+        included_receipts = [
+            receipt for receipt in receipts if receipt["included"]
+        ]
+        ordered_ids = self._dispatch_order(
+            included_receipts,
+            selected_edge_list,
+            fields_by_id,
+            items_by_id,
+        )
+        receipt_by_id = {receipt["itemId"]: receipt for receipt in receipts}
+        nodes: list[dict[str, Any]] = []
+        for item_id in ordered_ids:
+            node = dict(items_by_id[item_id])
+            node["dispatchReceipt"] = receipt_by_id[item_id]
+            nodes.append(node)
+        boundary_ids = sorted(
+            selected_item_ids - {receipt["itemId"] for receipt in receipts}
+        )
+        launch_totals: dict[str, int] = {}
+        for receipt in included_receipts:
+            launch_ids = [
+                entry["id"] for entry in receipt["ancestry"]["launches"]
+            ]
+            key = launch_ids[0] if launch_ids else "unscoped"
+            launch_totals[key] = launch_totals.get(key, 0) + 1
+        result = {
+            "nodes": nodes,
+            "edges": selected_edge_list,
+            "boundaryNodes": [
+                items_by_id[item_id]
+                for item_id in boundary_ids
+                if item_id in items_by_id
+            ],
+            "receipts": [
+                receipt_by_id[item_id]
+                for item_id in ordered_ids
+            ] + sorted(
+                [
+                    receipt for receipt in receipts
+                    if not receipt["included"]
+                ],
+                key=lambda receipt: (
+                    str(receipt.get("issueKey") or ""),
+                    receipt["itemId"],
+                ),
+            ),
+            "excluded": sorted(
+                [
+                    receipt for receipt in receipts
+                    if not receipt["included"]
+                ],
+                key=lambda receipt: (
+                    str(receipt.get("issueKey") or ""),
+                    receipt["itemId"],
+                ),
+            ),
+            "launchTotals": dict(sorted(launch_totals.items())),
+            "page": {
+                "totalCount": len(nodes),
+                "candidateCount": len(nodes),
+                "inspectedCount": len(receipts),
+                "returnedCount": len(nodes),
+                "nextCursor": None,
+                "truncated": False,
+            },
+            "validation": validation,
+            "watermark": watermark,
+            "query": query_receipt,
+        }
+        if self._json_size(result) > MAX_RESULT_BYTES:
+            terminal_receipt["page"]["truncated"] = True
+            raise ReaderError(
+                "RESULT_TRUNCATED",
+                "Dispatch eligibility response size invalidated the candidate set.",
+                {"receipt": terminal_receipt},
+            )
+        fitted = self._fit_graph_result(result)
+        if fitted["page"]["truncated"]:
+            terminal_receipt["page"]["truncated"] = True
+            raise ReaderError(
+                "RESULT_TRUNCATED",
+                "Dispatch eligibility response truncation invalidated the candidate set.",
+                {"receipt": terminal_receipt},
+            )
+        return fitted
+
+    @staticmethod
+    def _dispatch_ancestry_rows(
+        nodes: list[Mapping[str, Any]],
+        edges: list[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        endpoint_relationships: dict[str, list[str]] = {}
+        for edge in edges:
+            endpoint_relationships.setdefault(
+                str(edge["targetId"]),
+                [],
+            ).append(str(edge["id"]))
+        return [
+            {
+                "id": node["id"],
+                "issueKey": node.get("issueKey"),
+                "launchKey": node.get("launchKey"),
+                "relationshipIds": sorted(endpoint_relationships.get(str(node["id"]), [])),
+            }
+            for node in sorted(nodes, key=lambda value: str(value["id"]))
+        ]
+
+    def _dispatch_topology_findings(
+        self,
+        receipts: list[Mapping[str, Any]],
+        edges: list[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        candidate_ids = {
+            str(receipt["itemId"])
+            for receipt in receipts
+            if receipt.get("included")
+        }
+        adjacency: dict[str, set[str]] = {item_id: set() for item_id in candidate_ids}
+        indegree = {item_id: 0 for item_id in candidate_ids}
+        for edge in edges:
+            source = str(edge.get("sourceId"))
+            target = str(edge.get("targetId"))
+            if source not in candidate_ids or target not in candidate_ids:
+                continue
+            before, after = (
+                (target, source)
+                if edge.get("relationshipType") == "depends-on"
+                and edge.get("hardness") == "hard-serial"
+                and edge.get("state") == "cleared"
+                else (source, target)
+                if edge.get("relationshipType") == "precedes"
+                and edge.get("state") == "active"
+                else (None, None)
+            )
+            if before is not None and after not in adjacency[before]:
+                adjacency[before].add(after)
+                indegree[after] += 1
+        frontier = sorted(item_id for item_id, degree in indegree.items() if degree == 0)
+        visited: set[str] = set()
+        while frontier:
+            current = frontier.pop(0)
+            visited.add(current)
+            for target in sorted(adjacency[current]):
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    frontier.append(target)
+                    frontier.sort()
+        cycle_ids = sorted(candidate_ids - visited)
+        if not cycle_ids:
+            return []
+        return [
+            self._finding(
+                "dispatch-order-cycle",
+                "error",
+                "Dispatch dependency and precedes evidence contains a cycle.",
+                item_ids=cycle_ids,
+            )
+        ]
+
+    def _dispatch_order(
+        self,
+        receipts: list[Mapping[str, Any]],
+        edges: list[Mapping[str, Any]],
+        fields_by_id: Mapping[str, Mapping[str, Any]],
+        items_by_id: Mapping[str, Mapping[str, Any]],
+    ) -> list[str]:
+        candidate_ids = {str(receipt["itemId"]) for receipt in receipts}
+        receipt_by_id = {str(receipt["itemId"]): receipt for receipt in receipts}
+        adjacency: dict[str, set[str]] = {item_id: set() for item_id in candidate_ids}
+        indegree = {item_id: 0 for item_id in candidate_ids}
+        for edge in edges:
+            source = str(edge.get("sourceId"))
+            target = str(edge.get("targetId"))
+            if source not in candidate_ids or target not in candidate_ids:
+                continue
+            before, after = (
+                (target, source)
+                if edge.get("relationshipType") == "depends-on"
+                and edge.get("hardness") == "hard-serial"
+                and edge.get("state") == "cleared"
+                else (source, target)
+                if edge.get("relationshipType") == "precedes"
+                and edge.get("state") == "active"
+                else (None, None)
+            )
+            if before is not None and after not in adjacency[before]:
+                adjacency[before].add(after)
+                indegree[after] += 1
+        priority_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+        def numeric(value: Any) -> float:
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+
+        def tie_key(item_id: str) -> tuple[float, float, float, str, str]:
+            fields = fields_by_id[item_id]
+            launch_priority = max(
+                (
+                    numeric(fields_by_id.get(entry["id"], {}).get("criticalPathPriority"))
+                    for entry in receipt_by_id[item_id]["ancestry"]["launches"]
+                ),
+                default=0.0,
+            )
+            critical_priority = numeric(fields.get("criticalPathPriority"))
+            native_priority = float(
+                priority_rank.get(
+                    str(items_by_id[item_id].get("priority") or "").casefold(),
+                    0,
+                )
+            )
+            return (
+                -launch_priority,
+                -critical_priority,
+                -native_priority,
+                str(items_by_id[item_id].get("issueKey") or ""),
+                item_id,
+            )
+
+        frontier = sorted(
+            [item_id for item_id, degree in indegree.items() if degree == 0],
+            key=tie_key,
+        )
+        ordered: list[str] = []
+        while frontier:
+            current = frontier.pop(0)
+            ordered.append(current)
+            for target in sorted(adjacency[current]):
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    frontier.append(target)
+                    frontier.sort(key=tie_key)
+        return ordered
 
     def milestone_report(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_report_params(params)
@@ -1659,10 +2406,9 @@ class NativeTrackerReader:
         items_by_id = {item["id"]: item for item in items}
         edges: list[dict[str, Any]] = []
         findings: list[dict[str, Any]] = []
-        explicit_keys: set[tuple[str, str, str]] = set()
-        membership_roles: dict[tuple[str, str], str | None] = {}
-
         for row, fields in link_rows:
+            if bool(row["archived"]):
+                continue
             sources = self._relationship_targets(fields.get("sourceItem"))
             targets = self._relationship_targets(fields.get("targetItem"))
             link_id = str(row["id"])
@@ -1691,29 +2437,19 @@ class NativeTrackerReader:
                 continue
             source_id = source["itemId"]
             target_id = target["itemId"]
-            key = (source_id, relationship_type, target_id)
-            if key in explicit_keys:
-                if relationship_type == "part-of-launch" and (self._bounded_string(fields.get("status"), 40) or "active") == "active":
-                    duplicate_code = "conflicting-scope-roles" if membership_roles.get((source_id, target_id)) != self._bounded_string(fields.get("scopeRole"), 60) else "duplicate-active-membership"
-                    findings.append(self._finding(
-                        duplicate_code, "error",
-                        f"Launch membership {source_id} → {target_id} is duplicated or conflicts in scope role.",
-                        item_ids=[source_id, target_id], relationship_ids=[link_id],
-                    ))
-                    continue
+            status = self._bounded_string(fields.get("status"), 40)
+            allowed_states = {"active", "cleared", "blocked", "retired", "superseded"}
+            normalized_state = status if status in allowed_states else "unknown"
+            if normalized_state == "unknown":
                 findings.append(
                     self._finding(
-                        "duplicate-relationship",
-                        "warning",
-                        f"Duplicate normalized edge {source_id} → {relationship_type} → {target_id} was ignored.",
+                        "relationship-state-unknown",
+                        "error",
+                        f"Relationship {row['issue_key'] or link_id} has an unknown lifecycle state.",
+                        item_ids=[source_id, target_id],
                         relationship_ids=[link_id],
                     )
                 )
-                continue
-            explicit_keys.add(key)
-            if relationship_type == "part-of-launch":
-                membership_roles[(source_id, target_id)] = self._bounded_string(fields.get("scopeRole"), 60)
-            status = self._bounded_string(fields.get("status"), 40)
             directedness = self._bounded_string(fields.get("directedness"), 40)
             entry_evidence = self._relationship_targets(fields.get("entryEvidence"))
             exit_evidence = self._relationship_targets(fields.get("exitEvidence"))
@@ -1727,10 +2463,13 @@ class NativeTrackerReader:
                 "targetId": target_id,
                 "targetIssueKey": target.get("issueKey"),
                 "targetTitle": self._bounded_string(target.get("title"), 300),
-                "targetType": self._bounded_string(target.get("trackerType"), 100),
+                "targetType": items_by_id[target_id]["primaryType"]
+                if target_id in items_by_id
+                else self._bounded_string(target.get("trackerType"), 100),
                 "relationshipType": relationship_type,
                 "directed": directedness != "symmetric" and relationship_type != "related",
-                "state": status if status in {"active", "cleared", "superseded"} else "active",
+                "state": normalized_state,
+                "storedState": status,
                 "dependencyMode": self._bounded_string(fields.get("dependencyMode"), 40)
                 if relationship_type == "depends-on" else None,
                 "hardness": self._bounded_string(fields.get("hardness"), 40)
@@ -1763,10 +2502,10 @@ class NativeTrackerReader:
                         f"Launch membership {row['issue_key'] or link_id} cannot carry contributionRole or hardness.",
                         item_ids=[source_id, target_id], relationship_ids=[link_id],
                     ))
-            if not edge["sourceTitle"] and source_id in items_by_id:
+            if source_id in items_by_id:
                 edge["sourceTitle"] = items_by_id[source_id]["title"]
                 edge["sourceIssueKey"] = items_by_id[source_id].get("issueKey")
-            if not edge["targetTitle"] and target_id in items_by_id:
+            if target_id in items_by_id:
                 edge["targetTitle"] = items_by_id[target_id]["title"]
                 edge["targetIssueKey"] = items_by_id[target_id].get("issueKey")
                 edge["targetType"] = items_by_id[target_id]["primaryType"]
@@ -2726,7 +3465,10 @@ class NativeTrackerReader:
             "state": state,
             "findings": findings,
             "orphanCount": sum(item.get("code") == "orphan-endpoint" for item in findings),
-            "duplicateCount": sum(item.get("code") == "duplicate-active-membership" for item in findings),
+            "duplicateCount": sum(
+                item.get("code") in {"duplicate-active-membership", "duplicate-relationship"}
+                for item in findings
+            ),
             "cycleCount": sum(item.get("code") == "membership-cycle" for item in findings),
         }
 
@@ -2752,6 +3494,53 @@ class NativeTrackerReader:
         if schema_discovery is not None:
             watermark["schemaDiscovery"] = dict(schema_discovery)
         return watermark
+
+    def _semantic_duplicate_findings(
+        self,
+        edges: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Validate exact semantic identity only inside the selected edge set."""
+        by_identity: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
+        for edge in edges:
+            if edge.get("state") in {"retired", "unknown"}:
+                continue
+            identity = (
+                str(edge.get("sourceId") or ""),
+                str(edge.get("relationshipType") or ""),
+                str(edge.get("targetId") or ""),
+                str(edge.get("scopeRole") or ""),
+                str(edge.get("contributionRole") or ""),
+            )
+            by_identity.setdefault(identity, []).append(edge)
+        findings: list[dict[str, Any]] = []
+        for identity, duplicates in sorted(by_identity.items()):
+            if len(duplicates) < 2:
+                continue
+            ordered = sorted(duplicates, key=lambda edge: edge["id"])
+            relationship_type = identity[1]
+            code = (
+                "duplicate-active-membership"
+                if relationship_type == "part-of-launch"
+                else "duplicate-relationship"
+            )
+            findings.append(
+                self._finding(
+                    code,
+                    "error",
+                    (
+                        "Selected traversal contains exact duplicate semantic "
+                        f"relationship {identity[0]} → {relationship_type} → {identity[2]}."
+                    ),
+                    item_ids=[identity[0], identity[2]],
+                    relationship_ids=[edge["id"] for edge in ordered],
+                )
+            )
+        return findings
+
+    @staticmethod
+    def _stable_fingerprint(value: Any) -> str:
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def _fit_graph_result(self, result: dict[str, Any], sort: list[dict[str, str]] | None = None) -> dict[str, Any]:
         removed = False

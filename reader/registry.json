@@ -1,8 +1,22 @@
 {
-  "version": 1,
+  "version": 3,
   "terminalStatuses": ["done", "completed", "achieved", "closed", "shipped", "implemented", "released", "cancelled", "retired"],
   "scopeRoles": ["core", "supporting", "acceptance", "review", "evidence", "dependency-only"],
-  "executableTypes": ["task", "timeline-item", "devops-item", "prediclear-item", "automation", "mr", "merge-request", "pull-request", "change-request"],
+  "executableTypes": ["task", "timeline-item", "devops-item", "automation", "mr", "merge-request", "pull-request", "change-request"],
+  "dispatchPolicy": {
+    "dispatchableTypes": ["task", "bug"],
+    "readyStatuses": ["ready", "dispatch-ready"],
+    "qaPassStatuses": ["passed"],
+    "eligibleLaunchStatuses": ["active", "ready", "in-progress"],
+    "membershipRoles": ["core"],
+    "contributionRoles": ["primary"],
+    "admittedUnscopedTypes": [],
+    "admissibleDatabaseRoutes": ["none", "not-required", "ready", "approved"],
+    "clearHoldStates": ["clear", "none"],
+    "clearCustodyStates": ["clear", "none", "vacant"],
+    "survivorStates": ["survivor", "unique"],
+    "clearCollisionStates": ["clear", "none"]
+  },
   "relationshipTypes": {
     "part-of-launch": { "membership": true, "canBlock": false, "requiresScopeRole": true, "forbidsHardness": true },
     "governs": { "membership": false, "canBlock": false },
@@ -17,84 +31,21 @@
     "related": { "membership": false, "canBlock": false, "symmetric": true }
   },
   "roles": {
-    "project-manager": {
-      "ownerAliases": ["project-manager", "pm"],
-      "attentionTags": ["needs-pm-attention", "needs-project-manager-attention"]
+    "coordinator": {
+      "ownerAliases": ["coordinator", "coordination"],
+      "attentionTags": ["needs-coordination", "coordination-requested"]
     }
   },
   "caps": {
-    "queryLimitDefault": 50, "queryLimitMax": 200,
-    "clauseDepthMax": 5, "clauseCountMax": 32, "listValuesMax": 64, "textTermMax": 200,
-    "traverseNodesMax": 500, "traverseEdgesMax": 1000, "traverseDepthMax": 4, "traverseRootsMax": 8
-  },
-  "savedQueries": {
-    "role-active-work-and-attention": {
-      "version": 1, "kind": "predicate", "params": ["roleId"],
-      "label": "Active owned work and attention requests for one role",
-      "definition": {
-        "where": { "all": [
-          { "field": "archived", "op": "eq", "value": false },
-          { "field": "status", "op": "notIn", "value": "$terminalStatuses" },
-          { "any": [
-            { "field": "owner", "op": "eq", "value": "{roleId}" },
-            { "field": "tags", "op": "containsAny", "value": "{roleId.attentionTags}" }
-          ] }
-        ] },
-        "sort": [
-          { "field": "priority", "direction": "desc" },
-          { "field": "updated", "direction": "desc" }
-        ],
-        "limit": 100, "includeTotalCount": true
-      }
-    },
-    "launch-scope": {
-      "version": 1, "kind": "traversal", "params": ["launchKey"],
-      "label": "Everything in one launch, fail-closed",
-      "definition": {
-        "roots": ["{launchKey}"],
-        "membership": { "relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1 },
-        "expand": { "relationshipTypes": ["governs", "contributes-to", "reviews", "evidences", "depends-on"], "direction": "both", "maxDepth": 2, "edgeWhere": { "status": ["active"] }, "externalEndpointBehavior": "boundary" },
-        "limits": { "maxNodes": 500, "maxEdges": 1000 },
-        "failOn": { "truncation": true, "validation": true }
-      }
-    },
-    "launch-hard-blockers": {
-      "version": 1, "kind": "traversal", "params": ["launchKey"],
-      "label": "Active hard-serial blockers of one launch",
-      "definition": {
-        "roots": ["{launchKey}"],
-        "membership": { "relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1 },
-        "expand": { "relationshipTypes": ["depends-on"], "direction": "both", "maxDepth": 2, "edgeWhere": { "status": ["active"], "hardness": ["hard-serial"] }, "externalEndpointBehavior": "boundary" },
-        "limits": { "maxNodes": 500, "maxEdges": 1000 },
-        "failOn": { "truncation": true, "validation": false }
-      }
-    },
-    "launch-open-reviews": {
-      "version": 1, "kind": "traversal", "params": ["launchKey"],
-      "label": "Open reviews inside one launch",
-      "definition": {
-        "roots": ["{launchKey}"],
-        "membership": { "relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1 },
-        "expand": { "relationshipTypes": ["reviews"], "direction": "both", "maxDepth": 2, "edgeWhere": { "status": ["active"] }, "externalEndpointBehavior": "boundary" },
-        "nodeWhere": { "all": [ { "field": "status", "op": "notIn", "value": "$terminalStatuses" } ] },
-        "limits": { "maxNodes": 500, "maxEdges": 1000 },
-        "failOn": { "truncation": true, "validation": false }
-      }
-    },
-    "launch-unscheduled-executable-work": {
-      "version": 1, "kind": "traversal", "params": ["launchKey"],
-      "label": "Launch members that are executable but unscheduled",
-      "definition": {
-        "roots": ["{launchKey}"],
-        "membership": { "relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1 },
-        "nodeWhere": { "all": [
-          { "field": "status", "op": "notIn", "value": "$terminalStatuses" },
-          { "not": { "field": "dueDate", "op": "exists", "value": true } },
-          { "not": { "field": "forecastDate", "op": "exists", "value": true } }
-        ] },
-        "limits": { "maxNodes": 500, "maxEdges": 1000 },
-        "failOn": { "truncation": false, "validation": false }
-      }
-    }
+    "queryLimitDefault": 50,
+    "queryLimitMax": 200,
+    "clauseDepthMax": 5,
+    "clauseCountMax": 32,
+    "listValuesMax": 64,
+    "textTermMax": 200,
+    "traverseNodesMax": 500,
+    "traverseEdgesMax": 1000,
+    "traverseDepthMax": 4,
+    "traverseRootsMax": 8
   }
 }

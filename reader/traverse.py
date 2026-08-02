@@ -36,7 +36,10 @@ def validate_stage(raw: Any, path: str, registry: Mapping[str, Any], *, membersh
     result = {"relationshipTypes": relationship_types, "direction": direction, "maxDepth": depth}
     if membership:
         statuses = raw.get("status", ["active"])
-        if not isinstance(statuses, list) or not statuses or not all(value in {"active", "cleared", "superseded"} for value in statuses):
+        if not isinstance(statuses, list) or not statuses or not all(
+            value in {"active", "cleared", "blocked", "retired", "superseded", "unknown"}
+            for value in statuses
+        ):
             raise ReaderError("QUERY_INVALID", f"{path}.status is invalid.", {"path": f"{path}.status"})
         result["status"] = statuses
     else:

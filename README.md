@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.5.0 is Windows-first and was validated with Nimbalyst 0.71.3. Because
+Version 0.6.0 is Windows-first and was validated with Nimbalyst 0.71.3. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID,
@@ -22,7 +22,25 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ in the Midnight Orchid extension theme">
 </p>
 
-## What's new in 0.5.0
+## What's new in 0.6.0
+
+- Validate only eligible selected traversal edges and explicit boundary
+  evidence; retired, archived, filtered, and unrelated edges no longer leak
+  duplicate findings into bounded results.
+- Preserve blocked/retired lifecycle truth, keep role-distinct parallel
+  relationships by `scopeRole` and `contributionRole`, canonicalize target
+  types from current native rows, and make declared failures terminal.
+- Add the fail-closed `dispatch-eligible-work-v1` multi-launch saved traversal.
+  It returns deterministic candidate and exclusion receipts with revision,
+  QA, ancestry, dependency, hold, database-route, custody, collision, scope,
+  schema, registry, watermark, and query-fingerprint evidence.
+- Keep dispatch policy in the registry instead of embedding workspace-specific
+  project names, tags, owners, launch identities, or routes.
+- Keep bundled templates in `reader/saved-queries.json`; installations can add,
+  replace, or disable them through
+  `.nimbalyst/tracker-plus.queries.json` without recoding or rebuilding.
+
+## Previously in 0.5.0
 
 - Generate independent, fail-closed timeline artifacts from one or more
   normalized `selector.launchTags` values.
@@ -155,14 +173,14 @@ It includes exact arguments, safe mutation/resync patterns, normalized-link
 examples, filter behavior, PR references, and recovery steps.
 Its [saved-query and role-search catalog](docs/agent-guide.md#saved-query-and-role-search-catalog)
 documents every bundled template, role expansion, copy-paste invocation,
-override rules, caps, and failure behavior.
+external query-catalog rules, caps, and failure behavior.
 
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.
 - `native_tracker_query` runs bounded cursor-paged predicates or saved role
   queries.
 - `native_tracker_traverse` returns rooted members, edges, boundary context,
-  launch rollups, validation, and provenance.
+  launch rollups, validation, provenance, and fail-closed dispatch candidates.
 - `native_tracker_sync_timeline` projects current native tracker data into a
   workspace-relative `.ntimeline` document and returns validation and
   prior/current projection deltas in its sync receipt.

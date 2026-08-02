@@ -14,6 +14,7 @@ const required = [
   'dist/reader/contracts.py',
   'dist/reader/registry.py',
   'dist/reader/registry.json',
+  'dist/reader/saved-queries.json',
   'dist/reader/timeline-item.schema.yaml',
 ];
 

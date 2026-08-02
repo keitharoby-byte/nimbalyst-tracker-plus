@@ -316,14 +316,14 @@ function ViewFilters({ completionStates, scheduleHealth, visibleCount, totalCoun
 function Watermark({ document }: { document: TimelineDocument }) {
   const source = document.snapshot.source;
   const fingerprint = typeof source.schemaFingerprint === 'string' ? source.schemaFingerprint.slice(0, 12) : 'unavailable';
-  const revision = typeof source.projectStateRevision === 'string' ? source.projectStateRevision : 'unavailable';
+  const revision = typeof source.sourceRevision === 'string' ? source.sourceRevision : 'unavailable';
   const schemaState = source.schemaDiscovery?.state ?? 'unavailable';
   return (
     <div className="nt-watermark" aria-label="Projection provenance">
       <span>Snapshot <strong>{document.snapshot.generatedAt ? formatDateTime(document.snapshot.generatedAt) : 'not synced'}</strong></span>
       <span>Schema <code>{fingerprint}</code></span>
       <span>timeline-item <code>{schemaState}</code></span>
-      <span>ProjectState <code>{revision}</code></span>
+      <span>Source revision <code>{revision}</code></span>
       <span>Projection v{document.version}</span>
     </div>
   );

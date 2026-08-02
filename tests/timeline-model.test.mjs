@@ -57,10 +57,10 @@ test('completion and schedule filters compose and pull request references stay s
 test('launch filter keeps explicit members and marks one-hop context as boundary', () => {
   const document = parseTimelineDocument(JSON.stringify({
     version: 2,
-    filters: { launch: 'FFP-1' },
+    filters: { launch: 'RELEASE-A' },
     snapshot: {
       items: [
-        { id: 'launch', issueKey: 'LAUNCH-1', launchKey: 'FFP-1', primaryType: 'launch', title: 'Launch' },
+        { id: 'launch', issueKey: 'LAUNCH-1', launchKey: 'RELEASE-A', primaryType: 'launch', title: 'Launch' },
         { id: 'member', primaryType: 'task', title: 'Member' },
         { id: 'boundary', primaryType: 'milestone', title: 'Prior' },
         { id: 'unrelated', primaryType: 'task', title: 'Other' },

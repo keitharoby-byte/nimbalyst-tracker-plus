@@ -21,7 +21,7 @@ def make_fixture(output: Path, item_count: int, workspace: str) -> None:
         rows: list[tuple[object, ...]] = []
         launch_data = {
             "title": "Scale launch", "launchKey": "SCALE-1", "status": "active",
-            "owner": "pm", "audience": ["internal"], "scopeRevision": "1",
+            "owner": "coordinator", "audience": ["internal"], "scopeRevision": "1",
             "entryCriteria": [{}], "exitCriteria": [{}],
         }
         rows.append(_row("scale-launch", "LAUNCH-SCALE-1", "launch", launch_data, workspace, 0))
@@ -29,9 +29,9 @@ def make_fixture(output: Path, item_count: int, workspace: str) -> None:
             data = {
                 "title": f"Scale work {index}",
                 "status": "in-progress" if index % 7 else "done",
-                "owner": "pm" if index % 11 == 0 else f"owner-{index % 17}",
+                "owner": "coordinator" if index % 11 == 0 else f"owner-{index % 17}",
                 "priority": ("low", "medium", "high", "critical")[index % 4],
-                "tags": ["needs-pm-attention"] if index % 29 == 0 else [],
+                "tags": ["needs-coordination"] if index % 29 == 0 else [],
                 "dueDate": f"2026-{8 + (index % 4):02d}-{1 + (index % 27):02d}",
             }
             rows.append(_row(f"item-{index:06d}", f"SCALE-{index:06d}", "task", data, workspace, index))
