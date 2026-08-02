@@ -181,7 +181,7 @@ fields:
     displayInline: true
   - name: pullRequestUrl
     type: string
-  - name: projectStateRevision
+  - name: sourceRevision
     type: string
   - name: summary
     type: text

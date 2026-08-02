@@ -22,7 +22,6 @@ const EXECUTABLE_TYPES = new Set([
   'task',
   'timeline-item',
   'devops-item',
-  'prediclear-item',
   'automation',
   'mr',
   'merge-request',

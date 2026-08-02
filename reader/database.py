@@ -236,18 +236,18 @@ class NativeTrackerReader:
         rows = rows[: parsed["maxItems"]]
         items: list[dict[str, Any]] = []
         raw_fields_by_id: dict[str, dict[str, Any]] = {}
-        project_state_revision: str | None = None
+        source_revision: str | None = None
 
         for _row, fields in link_rows:
-            project_state_revision = project_state_revision or self._bounded_string(
-                fields.get("projectStateRevision"), 200
+            source_revision = source_revision or self._bounded_string(
+                fields.get("sourceRevision"), 200
             )
 
         for row in rows:
             data = self._parse_data(row)
             fields = self._flatten_custom_fields(data)
-            project_state_revision = project_state_revision or self._bounded_string(
-                fields.get("projectStateRevision"), 200
+            source_revision = source_revision or self._bounded_string(
+                fields.get("sourceRevision"), 200
             )
             item = self._timeline_item(row, fields)
             if not parsed["includeUnscheduled"] and not self._is_scheduled(item):
@@ -276,7 +276,7 @@ class NativeTrackerReader:
             edge["targetInSnapshot"] = edge["targetId"] in item_ids
 
         source = self._source(fingerprint, schema_discovery)
-        source["projectStateRevision"] = project_state_revision or "unavailable"
+        source["sourceRevision"] = source_revision or "unavailable"
         source["relationshipSource"] = (
             "native timeline-link rows" if link_rows else "legacy tracker fields"
         )
@@ -499,15 +499,15 @@ class NativeTrackerReader:
                 {"validation": validation_block},
             )
 
-        project_state_revision: str | None = None
+        source_revision: str | None = None
         for item_id in sorted(closure_ids):
-            project_state_revision = project_state_revision or self._bounded_string(
-                raw_fields_by_id[item_id].get("projectStateRevision"), 200
+            source_revision = source_revision or self._bounded_string(
+                raw_fields_by_id[item_id].get("sourceRevision"), 200
             )
         link_fields_by_id = {str(row["id"]): fields for row, fields in link_rows}
         for edge in selected_edges:
-            project_state_revision = project_state_revision or self._bounded_string(
-                link_fields_by_id[edge["id"]].get("projectStateRevision"), 200
+            source_revision = source_revision or self._bounded_string(
+                link_fields_by_id[edge["id"]].get("sourceRevision"), 200
             )
         for item in items:
             item.pop("archived", None)
@@ -523,7 +523,7 @@ class NativeTrackerReader:
             "schemaFingerprint": fingerprint,
             "registryVersion": self._registry["version"],
             "registryHash": self._registry_hash,
-            "projectStateRevision": project_state_revision or "unavailable",
+            "sourceRevision": source_revision or "unavailable",
         }
         output_hash = hashlib.sha256(
             json.dumps(semantic_projection, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -531,7 +531,7 @@ class NativeTrackerReader:
         generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         source = self._source(fingerprint, schema_discovery)
         source.update({
-            "projectStateRevision": project_state_revision or "unavailable",
+            "sourceRevision": source_revision or "unavailable",
             "relationshipSource": "native timeline-link rows",
             "relationshipRows": len(link_db_rows),
             "sourceItemCount": len(item_rows),
@@ -628,7 +628,7 @@ class NativeTrackerReader:
             schema_discovery if isinstance(schema_discovery, Mapping) else None,
         )
         source.update({
-            "projectStateRevision": "unavailable",
+            "sourceRevision": "unavailable",
             "relationshipSource": "native timeline-link rows",
             "relationshipRows": watermark["sourceRelationshipCount"],
             "sourceItemCount": watermark["sourceItemCount"],

@@ -150,7 +150,7 @@ export interface TimelineSnapshot {
     mode?: string;
     schemaAdapter?: string;
     schemaFingerprint?: string;
-    projectStateRevision?: string;
+    sourceRevision?: string;
     schemaDiscovery?: TrackerSchemaDiscovery;
     [key: string]: unknown;
   };

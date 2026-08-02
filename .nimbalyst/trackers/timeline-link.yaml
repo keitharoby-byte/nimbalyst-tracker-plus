@@ -175,7 +175,7 @@ fields:
     multiValue: true
   - name: effectiveRevision
     type: string
-  - name: projectStateRevision
+  - name: sourceRevision
     type: string
   - name: tags
     type: array

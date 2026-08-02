@@ -49,6 +49,24 @@ def _validate_saved_queries(value: Any) -> bool:
     return True
 
 
+def _validate_query_catalog(value: Any, *, allow_removal: bool = False) -> bool:
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("version"), int)
+        or value["version"] < 1
+        or not isinstance(value.get("queries"), dict)
+        or set(value) != {"version", "queries"}
+    ):
+        return False
+    queries = value["queries"]
+    if allow_removal:
+        active = {key: query for key, query in queries.items() if query is not None}
+        if not all(isinstance(key, str) and key for key in queries):
+            return False
+        return _validate_saved_queries(active)
+    return _validate_saved_queries(queries)
+
+
 def _validate_dispatch_policy(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
@@ -98,6 +116,10 @@ def _validate_registry(value: Any) -> None:
 def _load_bundled() -> dict[str, Any]:
     try:
         value = json.loads((Path(__file__).with_name("registry.json")).read_text(encoding="utf-8"))
+        catalog = json.loads((Path(__file__).with_name("saved-queries.json")).read_text(encoding="utf-8"))
+        if not _validate_query_catalog(catalog):
+            raise ValueError("saved query catalog is invalid")
+        value["savedQueries"] = copy.deepcopy(catalog["queries"])
         _validate_registry(value)
         return value
     except (OSError, json.JSONDecodeError, ValueError) as error:
@@ -131,23 +153,42 @@ def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool
     bundled = _load_bundled()
     effective = copy.deepcopy(bundled)
     override_active = False
-    override_error: str | None = None
+    override_errors: list[str] = []
     override_path = Path(workspace_path) / ".nimbalyst" / "tracker-plus.registry.json"
     if override_path.is_file():
         try:
             override = json.loads(override_path.read_text(encoding="utf-8"))
             _validate_override(override)
+            candidate = copy.deepcopy(effective)
             if "terminalStatuses" in override:
-                effective["terminalStatuses"] = list(override["terminalStatuses"])
+                candidate["terminalStatuses"] = list(override["terminalStatuses"])
             for key in ("roles", "savedQueries"):
                 if key in override:
-                    effective[key].update(copy.deepcopy(override[key]))
+                    candidate[key].update(copy.deepcopy(override[key]))
             if "dispatchPolicy" in override:
-                effective["dispatchPolicy"] = copy.deepcopy(override["dispatchPolicy"])
-            _validate_registry(effective)
+                candidate["dispatchPolicy"] = copy.deepcopy(override["dispatchPolicy"])
+            _validate_registry(candidate)
+            effective = candidate
             override_active = True
         except (OSError, json.JSONDecodeError, ValueError):
-            override_error = "The workspace Tracker+ registry override is invalid and was ignored."
+            override_errors.append("The workspace Tracker+ registry override is invalid and was ignored.")
+    query_override_path = Path(workspace_path) / ".nimbalyst" / "tracker-plus.queries.json"
+    if query_override_path.is_file():
+        try:
+            query_catalog = json.loads(query_override_path.read_text(encoding="utf-8"))
+            if not _validate_query_catalog(query_catalog, allow_removal=True):
+                raise ValueError("query catalog is invalid")
+            candidate = copy.deepcopy(effective)
+            for query_id, query in query_catalog["queries"].items():
+                if query is None:
+                    candidate["savedQueries"].pop(query_id, None)
+                else:
+                    candidate["savedQueries"][query_id] = copy.deepcopy(query)
+            _validate_registry(candidate)
+            effective = candidate
+            override_active = True
+        except (OSError, json.JSONDecodeError, ValueError):
+            override_errors.append("The workspace Tracker+ saved-query catalog is invalid and was ignored.")
     encoded = json.dumps(effective, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     registry_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
-    return effective, override_active, override_error, registry_hash
+    return effective, override_active, " ".join(override_errors) or None, registry_hash

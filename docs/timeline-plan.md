@@ -25,7 +25,7 @@ proceed.
 - `launch` stores the first-class launch key, lifecycle, target window, and
   release outcome used as an explicit traversal root.
 - `timeline-item` stores schedule, forecast, workflow, execution constraint,
-  risk inputs, owner, launch scope, gate, and ProjectState revision.
+  risk inputs, owner, launch scope, gate, and source revision.
 - `milestone` stores the same independent dimensions plus target date, report
   cadence, and milestone gate.
 - `timeline-link` is a native edge record. Its tracker ID is the stable
@@ -54,7 +54,7 @@ The target-side label is generated when rendering a backlink:
 `timeline-link` also carries directedness, active/cleared/superseded state,
 dependency mode, hard-serial/shared-resource/soft-coordination hardness,
 lead/lag days, clearing condition, owner, entry/exit evidence, source evidence,
-effective revision, and ProjectState revision. Creation/update timestamps come
+effective revision, and source revision. Creation/update timestamps come
 from the native tracker row.
 
 ## Projection and analysis
@@ -119,7 +119,7 @@ Every `.ntimeline` view displays:
 - snapshot generation identifier;
 - tracker snapshot timestamp;
 - tracker schema fingerprint;
-- ProjectState revision, or `unavailable` when no native record supplies one;
+- source revision, or `unavailable` when no native record supplies one;
 - projection document version.
 
 The JSON document is a bounded, reproducible projection. It contains no tracker

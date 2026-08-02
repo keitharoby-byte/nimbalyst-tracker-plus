@@ -76,14 +76,14 @@ test('sync reports hard errors and keeps no-selector behavior for a new document
 
 test('tag selector validation normalizes deterministically and rejects ambiguous input', () => {
   const selected = normalizeTimelineSelector({
-    launchTags: [' Demo-Launch ', 'ALPHA-LAUNCH'],
+    launchTags: [' Release-B-Tag ', 'RELEASE-A-TAG'],
   });
   assert.deepEqual(selected, {
-    launchTags: ['alpha-launch', 'demo-launch'],
+    launchTags: ['release-a-tag', 'release-b-tag'],
   });
 
   assert.throws(
-    () => normalizeTimelineSelector({ launchTags: ['Alpha-Launch', ' alpha-launch '] }),
+    () => normalizeTimelineSelector({ launchTags: ['release-a-tag', ' release-a-tag '] }),
     /unique after normalization/,
   );
   assert.throws(

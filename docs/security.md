@@ -31,10 +31,11 @@ backends disabled until the user approves their first-use native-code prompts.
   deleted records. Archived records require an explicit query flag; traversal
   retains archived evidence only on active `evidences` edges with an effective
   revision.
-- Workspace registry overrides are read only from
-  `.nimbalyst/tracker-plus.registry.json`. Locked vocabulary or cap keys make
-  the entire override invalid; bundled defaults remain active and the warning
-  is surfaced in every response.
+- Workspace policy overrides are read only from
+  `.nimbalyst/tracker-plus.registry.json`; saved-query catalog overrides are
+  read only from `.nimbalyst/tracker-plus.queries.json`. Both are validated
+  atomically. Locked vocabulary/cap keys or malformed query definitions leave
+  bundled defaults active and surface a warning in every response.
 - Comment bodies are capped at 20,000 Unicode characters. Tracker bodies are
   capped at 100,000 characters. The serialized result is capped below the
   512-KiB process-line ceiling.

@@ -252,7 +252,7 @@ class NativeTrackerReaderTests(unittest.TestCase):
             timeline["pullRequestUrl"],
             "https://github.com/example/repo/pull/42",
         )
-        self.assertEqual(result["source"]["projectStateRevision"], "fixture-r7")
+        self.assertEqual(result["source"]["sourceRevision"], "fixture-r7")
         self.assertFalse(any(finding["severity"] == "error" for finding in result["validation"]))
         serialized = json.dumps(result)
         self.assertNotIn("must-not-leak", serialized)
@@ -297,7 +297,7 @@ class NativeTrackerReaderTests(unittest.TestCase):
         secondary = {
             "title": "Intentional supporting item",
             "status": "in-progress",
-            "projectStateRevision": "fixture-r7",
+            "sourceRevision": "fixture-r7",
         }
         with closing(sqlite3.connect(self.db_path)) as connection:
             connection.execute(
@@ -358,7 +358,7 @@ class NativeTrackerReaderTests(unittest.TestCase):
                 "typeTags": ["milestone"],
                 "workflow": "achieved",
                 "_launchScopeExplicit": False,
-                "ownerLabel": "PM",
+                "ownerLabel": "Coordinator",
             },
             {
                 "id": "cleared-evidence",
@@ -398,10 +398,10 @@ class NativeTrackerReaderTests(unittest.TestCase):
             "primaryType": "task",
             "typeTags": ["task"],
             "workflow": "open",
-            "ownerLabel": "PM",
+            "ownerLabel": "Coordinator",
         }
         findings = self.reader._validate_timeline([
-            {**base, "id": "seed", "issueKey": "NIM-SEED", "tags": ["alpha-launch"], "_launchScopeExplicit": False},
+            {**base, "id": "seed", "issueKey": "NIM-SEED", "tags": ["release-a-tag"], "_launchScopeExplicit": False},
             {**base, "id": "orphan", "issueKey": "NIM-ORPHAN", "tags": [], "_launchScopeExplicit": True},
         ], [])
 
@@ -487,7 +487,7 @@ class NativeTrackerReaderTests(unittest.TestCase):
             "executionConstraint": "clear",
             "impact": 2,
             "likelihood": 2,
-            "projectStateRevision": "fixture-r7",
+            "sourceRevision": "fixture-r7",
         }
         timeline = {
             "title": "Ship timeline",
@@ -503,7 +503,7 @@ class NativeTrackerReaderTests(unittest.TestCase):
             "riskDurability": "structural",
             "recoverability": "hard",
             "launchScope": "launch",
-            "projectStateRevision": "fixture-r7",
+            "sourceRevision": "fixture-r7",
             "pullRequestUrl": "https://github.com/example/repo/pull/42",
         }
         with closing(sqlite3.connect(self.db_path)) as connection:
@@ -572,7 +572,7 @@ class NativeTrackerReaderTests(unittest.TestCase):
             "owner": "Fixture Owner",
             "contributionRole": contribution_role,
             "effectiveRevision": "fixture-r7",
-            "projectStateRevision": "fixture-r7",
+            "sourceRevision": "fixture-r7",
         }
         if with_review_evidence:
             data["entryEvidence"] = [{"itemId": "tracker-one"}]

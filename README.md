@@ -36,6 +36,9 @@ upgrade in place despite the broader Tracker+ name.
   schema, registry, watermark, and query-fingerprint evidence.
 - Keep dispatch policy in the registry instead of embedding workspace-specific
   project names, tags, owners, launch identities, or routes.
+- Keep bundled templates in `reader/saved-queries.json`; installations can add,
+  replace, or disable them through
+  `.nimbalyst/tracker-plus.queries.json` without recoding or rebuilding.
 
 ## Previously in 0.5.0
 
@@ -170,7 +173,7 @@ It includes exact arguments, safe mutation/resync patterns, normalized-link
 examples, filter behavior, PR references, and recovery steps.
 Its [saved-query and role-search catalog](docs/agent-guide.md#saved-query-and-role-search-catalog)
 documents every bundled template, role expansion, copy-paste invocation,
-override rules, caps, and failure behavior.
+external query-catalog rules, caps, and failure behavior.
 
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.

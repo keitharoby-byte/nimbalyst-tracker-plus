@@ -33,9 +33,17 @@ All notable changes to this project are documented in this file.
 - Move all dispatch workflow, type, QA, launch, scope, route, hold, custody,
   survivor, collision, and unscoped admission policy into the safe workspace
   registry override.
-- Advance the normalized schema adapter to v3 and the bundled registry to v2
+- Advance the normalized schema adapter to v3 and the bundled registry to v3
   so receipts make the lifecycle/identity and dispatch contract change
   explicit.
+- Move all bundled saved-query templates into the standalone
+  `reader/saved-queries.json` catalog and support atomic per-workspace add,
+  replace, or disable operations through
+  `.nimbalyst/tracker-plus.queries.json` without rebuilding the extension.
+- Remove installation-specific roles, tracker types, workspace paths, issue
+  identities, and decision language from public defaults, fixtures, comments,
+  and architecture/benchmark documentation; advance the neutral registry to
+  version 3.
 
 ## 0.5.0 - 2026-07-30
 
@@ -127,7 +135,7 @@ All notable changes to this project are documented in this file.
 - Calculate hard-serial critical paths, schedule slack, and dependency cycles.
 - Validate launch milestone cardinality, MR review/evidence rules, hard-serial
   controls, orphan records, and duplicate or malformed edges.
-- Watermark projections with snapshot time, schema fingerprint, ProjectState
+- Watermark projections with snapshot time, schema fingerprint, source state
   revision, and projection version; render nodes by schedule health and edges
   by relationship type.
 - Add persistent Compact row density and responsive Fit-to-width timeline

@@ -106,7 +106,7 @@ one of `where` and `savedQuery` is required.
 {
   "savedQuery": {
     "id": "role-active-work-and-attention",
-    "params": { "roleId": "project-manager" }
+    "params": { "roleId": "coordinator" }
   }
 }
 ```
@@ -148,7 +148,7 @@ context. Saved launch queries are the preferred contract:
 {
   "savedQuery": {
     "id": "launch-scope",
-    "params": { "launchKey": "FFP-1" }
+    "params": { "launchKey": "RELEASE-A" }
   }
 }
 ```
@@ -169,10 +169,12 @@ projections persist schema discovery under `snapshot.source` for UI review.
 ## Saved query and role search catalog
 
 Saved queries are versioned, parameterized templates from the effective
-Tracker+ registry. Prefer them over rebuilding common predicates in each agent
-session. The response echoes the template ID, version, validated parameters,
-and fully expanded definition under `query`, so callers can audit exactly what
-ran. Always inspect `page`, `validation`, and `watermark` before acting on the
+Tracker+ query catalog. Bundled defaults live in `reader/saved-queries.json`;
+an installation can add, replace, or disable templates with
+`.nimbalyst/tracker-plus.queries.json` without rebuilding the extension. The
+response echoes the template ID, version, validated parameters, and fully
+expanded definition under `query`, so callers can audit exactly what ran.
+Always inspect `page`, `validation`, and `watermark` before acting on the
 result.
 
 ### Role resolution
@@ -181,7 +183,7 @@ The bundled role catalog currently contains:
 
 | Role ID | Owner aliases | Attention tags |
 |---|---|---|
-| `project-manager` | `project-manager`, `pm` | `needs-pm-attention`, `needs-project-manager-attention` |
+| `coordinator` | `coordinator`, `coordination` | `needs-coordination`, `coordination-requested` |
 
 Role IDs and aliases are matched case-insensitively against string owners and
 the native identity fields `username`, `name`, `displayName`, and `gitName`.
@@ -206,7 +208,7 @@ Copy-paste role inbox query:
 {
   "savedQuery": {
     "id": "role-active-work-and-attention",
-    "params": { "roleId": "project-manager" }
+    "params": { "roleId": "coordinator" }
   }
 }
 ```
@@ -237,8 +239,8 @@ Copy-paste dispatch and launch queries:
   "savedQuery": {
     "id": "dispatch-eligible-work-v1",
     "params": {
-      "roleId": "project-manager",
-      "launchKeys": ["FFP-1", "FFP-2"],
+      "roleId": "coordinator",
+      "launchKeys": ["RELEASE-A", "RELEASE-B"],
       "includeUnscoped": false
     }
   }
@@ -249,7 +251,7 @@ Copy-paste dispatch and launch queries:
 {
   "savedQuery": {
     "id": "launch-scope",
-    "params": { "launchKey": "FFP-1" }
+    "params": { "launchKey": "RELEASE-A" }
   }
 }
 ```
@@ -258,7 +260,7 @@ Copy-paste dispatch and launch queries:
 {
   "savedQuery": {
     "id": "launch-hard-blockers",
-    "params": { "launchKey": "FFP-1" }
+    "params": { "launchKey": "RELEASE-A" }
   }
 }
 ```
@@ -267,7 +269,7 @@ Copy-paste dispatch and launch queries:
 {
   "savedQuery": {
     "id": "launch-open-reviews",
-    "params": { "launchKey": "FFP-1" }
+    "params": { "launchKey": "RELEASE-A" }
   }
 }
 ```
@@ -276,7 +278,7 @@ Copy-paste dispatch and launch queries:
 {
   "savedQuery": {
     "id": "launch-unscheduled-executable-work",
-    "params": { "launchKey": "FFP-1" }
+    "params": { "launchKey": "RELEASE-A" }
   }
 }
 ```
@@ -368,6 +370,39 @@ the attention-tag array may be empty. Role and saved-query entries merge by ID,
 while `terminalStatuses` and `dispatchPolicy` replace their entire bundled
 values when present.
 
+### Managing saved queries without code changes
+
+Create `.nimbalyst/tracker-plus.queries.json` in the workspace. Query objects
+add or replace templates by ID; `null` disables a bundled template:
+
+```json
+{
+  "version": 1,
+  "queries": {
+    "workspace-ready-items": {
+      "version": 1,
+      "kind": "predicate",
+      "params": [],
+      "label": "Workspace-defined ready items",
+      "definition": {
+        "where": { "field": "status", "op": "eq", "value": "ready" },
+        "sort": [{ "field": "priority", "direction": "desc" }],
+        "limit": 100,
+        "includeTotalCount": true
+      }
+    },
+    "launch-open-reviews": null
+  }
+}
+```
+
+The complete catalog is validated before activation. An invalid catalog is
+ignored atomically, bundled defaults remain active, and the response reports a
+registry override warning. The effective query catalog contributes to
+`registryHash`, so agents can detect configuration changes. The older
+`savedQueries` key in `tracker-plus.registry.json` remains supported for
+compatibility, but the dedicated catalog is the preferred public interface.
+
 An invalid override is ignored as a whole. Bundled defaults remain active and
 every response reports `registry-override-invalid`. Overrides cannot change
 relationship types, scope roles, executable types, caps, or registry version.
@@ -401,7 +436,7 @@ title, view settings, and state filters.
   "outputPath": "planning/Tracker Timeline.ntimeline",
   "includeUnscheduled": true,
   "maxItems": 500,
-  "launch": "FFP-1",
+  "launch": "RELEASE-A",
   "from": "2026-07-01",
   "to": "2026-09-30"
 }
@@ -428,9 +463,9 @@ For an independent tag-seeded artifact:
 
 ```json
 {
-  "outputPath": "factory/PrediClear Alpha.ntimeline",
+  "outputPath": "planning/Release Alpha.ntimeline",
   "selector": {
-    "launchTags": ["alpha-launch"]
+    "launchTags": ["release-a-tag"]
   },
   "includeUnscheduled": true,
   "maxItems": 500
@@ -615,16 +650,20 @@ nodes. Clearing it restores the whole snapshot; it never edits tracker data.
 
 ## Registry overrides
 
-Tracker+ ships `reader/registry.json`. A workspace may override only
-`terminalStatuses`, `roles`, and `savedQueries` through
-`.nimbalyst/tracker-plus.registry.json`. Roles and saved queries merge by ID;
-terminal statuses replace the default list. `relationshipTypes`, `scopeRoles`,
-`executableTypes`, `caps`, and `version` are locked. Any malformed or locked
-override is ignored whole and produces `registry-override-invalid` until fixed.
-Every response includes registry version, effective hash, and override state.
+Tracker+ ships structural policy in `reader/registry.json` and query templates
+in `reader/saved-queries.json`. A workspace may override `terminalStatuses`,
+`roles`, legacy `savedQueries`, and the complete `dispatchPolicy` through
+`.nimbalyst/tracker-plus.registry.json`. Roles and legacy saved queries merge
+by ID; terminal statuses and dispatch policy replace their complete defaults.
+Use `.nimbalyst/tracker-plus.queries.json` for normal query-catalog management.
 
-`reader/registry.json` is the single canonical source for the relationship-type
-and scope-role vocabulary that governs tracker validation, adapter
+`relationshipTypes`, `scopeRoles`, `executableTypes`, `caps`, and `version` are
+locked. Any malformed or locked override is ignored atomically and produces
+`registry-override-invalid` until fixed. Every response includes registry
+version, effective hash, and override state.
+
+`reader/registry.json` is the canonical source for relationship and scope-role
+vocabulary used by tracker validation, adapter
 normalization, projection, and rendering. An automated contract test keeps it in
 lockstep with the renderer's relationship set and the `timeline-link` schema's
 `scopeRole` options, so registry/schema drift fails the suite rather than
@@ -644,7 +683,7 @@ all-or-nothing; migrate relationships before relying on mixed legacy fields.
 - Critical path is calculated from durations and active hard-serial edges; it
   is not a manually assigned status.
 
-Treat validation errors as data-governance findings, not automatic permission
+Treat validation errors as source-data findings, not automatic permission
 to rewrite source records. Read the affected items and relationships first.
 
 ## Safety and error handling
