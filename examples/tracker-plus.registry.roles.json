@@ -1,0 +1,20 @@
+{
+  "roles": {
+    "delivery-coordinator": {
+      "ownerAliases": ["delivery-coordinator", "release-coordinator"],
+      "attentionTags": ["needs-coordination", "release-attention"]
+    },
+    "quality-reviewer": {
+      "ownerAliases": ["quality-reviewer", "qa-reviewer"],
+      "attentionTags": ["needs-quality-review", "qa-attention"]
+    },
+    "security-reviewer": {
+      "ownerAliases": ["security-reviewer", "security-team"],
+      "attentionTags": ["needs-security-review", "security-attention"]
+    },
+    "documentation-owner": {
+      "ownerAliases": ["documentation-owner", "docs-team"],
+      "attentionTags": ["needs-docs", "documentation-attention"]
+    }
+  }
+}

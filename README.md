@@ -174,6 +174,8 @@ examples, filter behavior, PR references, and recovery steps.
 Its [saved-query and role-search catalog](docs/agent-guide.md#saved-query-and-role-search-catalog)
 documents every bundled template, role expansion, copy-paste invocation,
 external query-catalog rules, caps, and failure behavior.
+The dedicated [role guide](docs/roles.md) explains query roles versus graph
+roles and includes neutral examples plus a ready-to-copy installer registry.
 
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.

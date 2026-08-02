@@ -179,6 +179,11 @@ result.
 
 ### Role resolution
 
+For a conceptual explanation, common examples, and the difference between
+query roles and relationship roles, see [Roles in Tracker+](roles.md). A
+ready-to-copy multi-role registry is available at
+[`examples/tracker-plus.registry.roles.json`](../examples/tracker-plus.registry.roles.json).
+
 The bundled role catalog currently contains:
 
 | Role ID | Owner aliases | Attention tags |
@@ -369,6 +374,12 @@ The existing `role-active-work-and-attention` template immediately accepts
 the attention-tag array may be empty. Role and saved-query entries merge by ID,
 while `terminalStatuses` and `dispatchPolicy` replace their entire bundled
 values when present.
+
+Roles are selectors, not permissions or assignments. An owner alias matches
+work already owned by that identity; an attention tag includes work requesting
+the role's attention regardless of owner. Keep aliases specific to avoid
+accidental cross-role matches. See the [role guide](roles.md) for delivery,
+quality, security, and documentation examples.
 
 ### Managing saved queries without code changes
 
