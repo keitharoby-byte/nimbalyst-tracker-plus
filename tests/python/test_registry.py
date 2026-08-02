@@ -128,6 +128,32 @@ class RegistryTests(unittest.TestCase):
             self.assertNotIn("launch-open-reviews", registry["savedQueries"])
             self.assertIn("workspace-ready-items", registry["savedQueries"])
 
+    def test_published_external_query_catalog_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_directory = root / ".nimbalyst"
+            config_directory.mkdir()
+            shutil.copyfile(
+                ROOT / "examples" / "tracker-plus.queries.json",
+                config_directory / "tracker-plus.queries.json",
+            )
+
+            registry, active, error, _registry_hash = effective_registry(root)
+
+            self.assertTrue(active)
+            self.assertIsNone(error)
+            self.assertEqual(
+                {
+                    registry["savedQueries"][query_id]["kind"]
+                    for query_id in (
+                        "workspace-ready-items",
+                        "workspace-walk-readiness",
+                        "workspace-launch-scope",
+                    )
+                },
+                {"predicate", "composed", "traversal"},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Add a copy-ready external query catalog covering predicate, traversal, and
+  composed templates, and link it from installation, agent, and release
+  documentation.
+
 ## 0.7.0 - 2026-08-02
 
 - Add registry-supported composed saved queries that select bounded roots with

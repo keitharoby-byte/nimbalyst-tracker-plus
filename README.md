@@ -189,6 +189,9 @@ documents every bundled template, role expansion, copy-paste invocation,
 external query-catalog rules, caps, and failure behavior.
 The dedicated [role guide](docs/roles.md) explains query roles versus graph
 roles and includes neutral examples plus a ready-to-copy installer registry.
+The [installation guide](docs/installation.md#workspace-configuration) and
+[`examples/tracker-plus.queries.json`](examples/tracker-plus.queries.json)
+provide copy-ready external predicate, traversal, and composed query templates.
 
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.
