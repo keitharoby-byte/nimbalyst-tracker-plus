@@ -64,7 +64,7 @@ if (
   readerManifest.formatVersion !== 1
   || readerManifest.extensionVersion !== manifest.version
   || readerManifest.adapterVersion !== 3
-  || readerManifest.registryVersion !== 3
+  || readerManifest.registryVersion !== 4
 ) {
   throw new Error('Reader bundle identity does not match the extension release.');
 }

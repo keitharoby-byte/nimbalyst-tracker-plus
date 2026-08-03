@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,9 @@ except ImportError:  # pragma: no cover
     from contracts import SCHEMA_ADAPTER, ReaderError  # type: ignore[no-redef]
 
 LOCKED_OVERRIDE_KEYS = {"relationshipTypes", "scopeRoles", "executableTypes", "caps", "version"}
-OVERRIDABLE_KEYS = {"terminalStatuses", "roles", "savedQueries", "dispatchPolicy"}
+OVERRIDABLE_KEYS = {
+    "terminalStatuses", "roles", "savedQueries", "dispatchPolicy", "dispatchEvidence",
+}
 BUNDLE_MANIFEST = "bundle-manifest.json"
 BUNDLE_FORMAT_VERSION = 1
 BUNDLE_DIAGNOSTIC_FILES = ("registry.py", "registry.json", "saved-queries.json")
@@ -26,6 +29,23 @@ REQUIRED_CAPS = {
 }
 _BUNDLED_CACHE: dict[str, Any] | None = None
 _BUNDLED_DIAGNOSTICS: dict[str, Any] | None = None
+FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+DISPATCH_EVIDENCE_SIGNALS: dict[str, str] = {
+    "workflow": "string",
+    "packetRevision": "string",
+    "currentRevision": "string",
+    "isCurrentRevision": "boolean",
+    "qaEvidenceRevision": "string",
+    "qaStatus": "string",
+    "holdState": "string",
+    "databaseRouteState": "string",
+    "custodyState": "string",
+    "survivorState": "string",
+    "collisionState": "string",
+    "executionConstraint": "string",
+    "failureState": "string",
+    "supersededBy": "string",
+}
 
 
 def _string_list(value: Any, *, nonempty: bool = True) -> bool:
@@ -91,6 +111,75 @@ def _validate_dispatch_policy(value: Any) -> bool:
     )
 
 
+def _bounded_string_value(value: Any, limit: int = 200) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value.strip()) <= limit
+
+
+def _validate_dispatch_evidence_source(
+    value: Any,
+    signal_type: str,
+    relationship_types: set[str],
+) -> bool:
+    if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
+        return False
+    kind = value["kind"]
+    if kind == "field":
+        return set(value) == {"kind", "field"} and isinstance(value.get("field"), str) and bool(FIELD_NAME.fullmatch(value["field"]))
+    if kind == "tag":
+        mapped = value.get("value")
+        return (
+            set(value) == {"kind", "tag", "value"}
+            and _bounded_string_value(value.get("tag"), 100)
+            and ((signal_type == "string" and _bounded_string_value(mapped)) or (signal_type == "boolean" and isinstance(mapped, bool)))
+        )
+    if kind == "tag-prefix":
+        return (
+            signal_type == "string"
+            and set(value) == {"kind", "prefix"}
+            and _bounded_string_value(value.get("prefix"), 100)
+        )
+    if kind == "relationship":
+        mapped = value.get("value")
+        return (
+            set(value) == {"kind", "relationshipType", "direction", "state", "value"}
+            and value.get("relationshipType") in relationship_types
+            and value.get("direction") in {"incoming", "outgoing", "either"}
+            and value.get("state") in {"active", "cleared", "blocked"}
+            and ((signal_type == "string" and _bounded_string_value(mapped)) or (signal_type == "boolean" and isinstance(mapped, bool)))
+        )
+    return False
+
+
+def _validate_dispatch_evidence(
+    value: Any,
+    relationship_types: set[str],
+    *,
+    allow_partial: bool = False,
+) -> bool:
+    if not isinstance(value, dict) or not value:
+        return False
+    if not set(value).issubset(DISPATCH_EVIDENCE_SIGNALS):
+        return False
+    if not allow_partial and set(value) != set(DISPATCH_EVIDENCE_SIGNALS):
+        return False
+    for signal, definition in value.items():
+        if not isinstance(definition, dict) or set(definition) != {"sources"}:
+            return False
+        sources = definition.get("sources")
+        if not isinstance(sources, list) or not 1 <= len(sources) <= 8:
+            return False
+        if not all(
+            _validate_dispatch_evidence_source(
+                source,
+                DISPATCH_EVIDENCE_SIGNALS[signal],
+                relationship_types,
+            )
+            for source in sources
+        ):
+            return False
+    return True
+
+
 def _validate_registry(value: Any) -> None:
     if not isinstance(value, dict) or not isinstance(value.get("version"), int):
         raise ValueError("version must be an integer")
@@ -117,6 +206,11 @@ def _validate_registry(value: Any) -> None:
         raise ValueError("savedQueries are invalid")
     if not _validate_dispatch_policy(value.get("dispatchPolicy")):
         raise ValueError("dispatchPolicy is invalid")
+    if not _validate_dispatch_evidence(
+        value.get("dispatchEvidence"),
+        set(relationships),
+    ):
+        raise ValueError("dispatchEvidence is invalid")
 
 
 def _sha256(path: Path) -> str:
@@ -293,7 +387,7 @@ def bundled_diagnostics() -> dict[str, Any]:
     return copy.deepcopy(_BUNDLED_DIAGNOSTICS or {})
 
 
-def _validate_override(value: Any) -> None:
+def _validate_override(value: Any, relationship_types: set[str]) -> None:
     if not isinstance(value, dict):
         raise ValueError("override must be an object")
     unknown = set(value) - OVERRIDABLE_KEYS - LOCKED_OVERRIDE_KEYS
@@ -313,6 +407,12 @@ def _validate_override(value: Any) -> None:
         raise ValueError("override savedQueries are invalid")
     if "dispatchPolicy" in value and not _validate_dispatch_policy(value["dispatchPolicy"]):
         raise ValueError("override dispatchPolicy is invalid")
+    if "dispatchEvidence" in value and not _validate_dispatch_evidence(
+        value["dispatchEvidence"],
+        relationship_types,
+        allow_partial=True,
+    ):
+        raise ValueError("override dispatchEvidence is invalid")
 
 
 def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool, str | None, str]:
@@ -325,7 +425,7 @@ def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool
     if override_path.is_file():
         try:
             override = json.loads(override_path.read_text(encoding="utf-8"))
-            _validate_override(override)
+            _validate_override(override, set(effective["relationshipTypes"]))
             candidate = copy.deepcopy(effective)
             if "terminalStatuses" in override:
                 candidate["terminalStatuses"] = list(override["terminalStatuses"])
@@ -334,6 +434,8 @@ def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool
                     candidate[key].update(copy.deepcopy(override[key]))
             if "dispatchPolicy" in override:
                 candidate["dispatchPolicy"] = copy.deepcopy(override["dispatchPolicy"])
+            if "dispatchEvidence" in override:
+                candidate["dispatchEvidence"].update(copy.deepcopy(override["dispatchEvidence"]))
             _validate_registry(candidate)
             effective = candidate
             override_active = True

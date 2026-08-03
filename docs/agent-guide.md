@@ -320,13 +320,14 @@ alias catalog, and `includeUnscoped` is effective only for tracker types listed
 in `dispatchPolicy.admittedUnscopedTypes`. Omitting `launchKeys` considers all
 current launches admitted by policy; it does not infer scope from tags.
 
-Potentially eligible rows must provide native `packetRevision`,
-`currentRevision` (or `isCurrentRevision: true`), `qaEvidenceRevision`,
-`qaStatus`, `holdState`, `databaseRouteState`, `custodyState`,
-`survivorState`, and `collisionState`. QA evidence must match the packet
-revision. Optional `pullRequestCustody`, `sessionCustody`, and
-`worktreeCustody` values are returned without being interpreted as identity.
-`failureState` and `supersededBy`, when present, can only exclude a packet.
+Potentially eligible rows resolve `packetRevision`, currentness,
+`qaEvidenceRevision`, `qaStatus`, `holdState`, `databaseRouteState`,
+`custodyState`, `survivorState`, and `collisionState` through the effective
+`dispatchEvidence` mapping. Bundled defaults read the like-named native fields.
+QA evidence must match the packet revision. Optional `pullRequestCustody`,
+`sessionCustody`, and `worktreeCustody` values are returned without being
+interpreted as identity. `failureState` and `supersededBy`, when present, can
+only exclude a packet.
 
 Scope comes only from active primary/core normalized relationships:
 `part-of-launch.scopeRole` and
@@ -380,6 +381,49 @@ the object, so include every key:
 }
 ```
 
+`dispatchEvidence` overrides merge by logical signal with the bundled mapping.
+Each source is declarative and allowlisted: a named native `field`, an exact
+`tag` mapped to a fixed string/boolean value, a string-valued `tag-prefix`, or
+one normalized `relationship` type/direction/state mapped to a fixed value.
+No source evaluates workspace code, performs a fuzzy tag match, or infers an
+unstated relationship. This minimal override accepts `to-do` workflow rows and
+a `qa-signed-off` tag while keeping default sources for every other signal:
+
+```json
+{
+  "dispatchPolicy": {
+    "dispatchableTypes": ["task", "bug"],
+    "readyStatuses": ["to-do"],
+    "qaPassStatuses": ["passed"],
+    "eligibleLaunchStatuses": ["active", "ready", "in-progress", "waiting"],
+    "membershipRoles": ["core"],
+    "contributionRoles": ["primary"],
+    "admittedUnscopedTypes": [],
+    "admissibleDatabaseRoutes": ["none", "not-required", "ready", "approved"],
+    "clearHoldStates": ["clear", "none"],
+    "clearCustodyStates": ["clear", "none", "vacant"],
+    "survivorStates": ["survivor", "unique"],
+    "clearCollisionStates": ["clear", "none"]
+  },
+  "dispatchEvidence": {
+    "qaStatus": {
+      "sources": [{ "kind": "tag", "tag": "qa-signed-off", "value": "passed" }]
+    },
+    "packetRevision": {
+      "sources": [{ "kind": "tag-prefix", "prefix": "packet-revision:" }]
+    }
+  }
+}
+```
+
+Mappings are validated and activated atomically. A missing required logical
+signal produces `DISPATCH_EVIDENCE_INCOMPLETE` with
+`incompleteEvidence[].missingLogicalSignals`, no candidates, and no launch
+totals. Detailed receipts expose every resolved evidence value and source;
+`query.evidenceMapping.fingerprint` and the effective registry hash change with
+the mapping. `includeUnscoped=true` with an empty
+`admittedUnscopedTypes` list is rejected as `UNSCOPED_WORK_NOT_CONFIGURED`.
+
 ### Extending the role catalog
 
 Add workspace-specific roles without rebuilding Tracker+ by creating
@@ -399,9 +443,9 @@ Add workspace-specific roles without rebuilding Tracker+ by creating
 The existing `role-active-work-and-attention` template immediately accepts
 `{"roleId":"quality-lead"}`. Role IDs must match
 `^[a-z0-9][a-z0-9-]{0,63}$`. Override roles require at least one owner alias;
-the attention-tag array may be empty. Role and saved-query entries merge by ID,
-while `terminalStatuses` and `dispatchPolicy` replace their entire bundled
-values when present.
+the attention-tag array may be empty. Role, saved-query, and dispatch-evidence
+entries merge by ID, while `terminalStatuses` and `dispatchPolicy` replace
+their entire bundled values when present.
 
 Roles are selectors, not permissions or assignments. An owner alias matches
 work already owned by that identity; an attention tag includes work requesting

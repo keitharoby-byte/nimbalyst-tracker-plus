@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "terminalStatuses": ["done", "completed", "achieved", "closed", "shipped", "implemented", "released", "cancelled", "retired"],
   "scopeRoles": ["core", "supporting", "acceptance", "review", "evidence", "dependency-only"],
   "executableTypes": ["task", "timeline-item", "devops-item", "automation", "mr", "merge-request", "pull-request", "change-request"],
@@ -16,6 +16,22 @@
     "clearCustodyStates": ["clear", "none", "vacant"],
     "survivorStates": ["survivor", "unique"],
     "clearCollisionStates": ["clear", "none"]
+  },
+  "dispatchEvidence": {
+    "workflow": { "sources": [{ "kind": "field", "field": "status" }] },
+    "packetRevision": { "sources": [{ "kind": "field", "field": "packetRevision" }] },
+    "currentRevision": { "sources": [{ "kind": "field", "field": "currentRevision" }] },
+    "isCurrentRevision": { "sources": [{ "kind": "field", "field": "isCurrentRevision" }] },
+    "qaEvidenceRevision": { "sources": [{ "kind": "field", "field": "qaEvidenceRevision" }] },
+    "qaStatus": { "sources": [{ "kind": "field", "field": "qaStatus" }] },
+    "holdState": { "sources": [{ "kind": "field", "field": "holdState" }] },
+    "databaseRouteState": { "sources": [{ "kind": "field", "field": "databaseRouteState" }] },
+    "custodyState": { "sources": [{ "kind": "field", "field": "custodyState" }] },
+    "survivorState": { "sources": [{ "kind": "field", "field": "survivorState" }] },
+    "collisionState": { "sources": [{ "kind": "field", "field": "collisionState" }] },
+    "executionConstraint": { "sources": [{ "kind": "field", "field": "executionConstraint" }] },
+    "failureState": { "sources": [{ "kind": "field", "field": "failureState" }] },
+    "supersededBy": { "sources": [{ "kind": "field", "field": "supersededBy" }] }
   },
   "relationshipTypes": {
     "part-of-launch": { "membership": true, "canBlock": false, "requiresScopeRole": true, "forbidsHardness": true },
