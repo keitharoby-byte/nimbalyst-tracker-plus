@@ -1461,11 +1461,22 @@ class NativeTrackerReader:
     ) -> dict[str, Any]:
         """Resolve one deterministic, fail-closed dispatch candidate set."""
         policy = self._registry["dispatchPolicy"]
+        evidence_mapping = self._registry["dispatchEvidence"]
+        evidence_mapping_fingerprint = self._stable_fingerprint(evidence_mapping)
         saved = query_echo["savedQuery"]
         params = dict(saved.get("params", {}))
         launch_keys = [str(value) for value in params.get("launchKeys", [])]
         include_unscoped = bool(params.get("includeUnscoped", False))
         role_id = params.get("roleId")
+        if include_unscoped and not policy["admittedUnscopedTypes"]:
+            raise ReaderError(
+                "UNSCOPED_WORK_NOT_CONFIGURED",
+                "includeUnscoped requires at least one dispatchPolicy.admittedUnscopedTypes entry.",
+                {
+                    "includeUnscoped": True,
+                    "admittedUnscopedTypes": [],
+                },
+            )
         try:
             with self._connect() as connection:
                 fingerprint = self._validate_schema(connection)
@@ -1511,11 +1522,29 @@ class NativeTrackerReader:
             edge for edge in edges
             if edge.get("state") not in {"retired", "unknown"}
         ]
+        evidence_edges_by_item: dict[str, list[dict[str, Any]]] = {}
+        for edge in live_edges:
+            evidence_edges_by_item.setdefault(str(edge["sourceId"]), []).append(edge)
+            evidence_edges_by_item.setdefault(str(edge["targetId"]), []).append(edge)
+        for values in evidence_edges_by_item.values():
+            values.sort(key=lambda edge: str(edge["id"]))
+        evidence_by_item: dict[str, dict[str, dict[str, Any]]] = {}
+
+        def dispatch_evidence(item_id: str) -> dict[str, dict[str, Any]]:
+            if item_id not in evidence_by_item:
+                evidence_by_item[item_id] = self._resolve_dispatch_evidence(
+                    item_id,
+                    fields_by_id[item_id],
+                    evidence_edges_by_item.get(item_id, []),
+                    evidence_mapping,
+                )
+            return evidence_by_item[item_id]
+
         eligible_launches = [
             item for item in items
             if not item.get("archived")
             and item.get("primaryType") in {"launch", "milestone"}
-            and str(item.get("workflow") or "").casefold()
+            and str(dispatch_evidence(item["id"])["workflow"]["value"] or "").casefold()
             in {value.casefold() for value in policy["eligibleLaunchStatuses"]}
         ]
         launch_by_key: dict[str, list[dict[str, Any]]] = {}
@@ -1614,6 +1643,7 @@ class NativeTrackerReader:
                 hard_dependencies_by_source.setdefault(edge["sourceId"], []).append(edge)
         for item in sorted(source_items, key=lambda value: value["id"]):
             fields = fields_by_id[item["id"]]
+            evidence = dispatch_evidence(item["id"])
             ancestry_nodes, ancestry_edges = ancestry(item["id"])
             launches = [
                 node for node in ancestry_nodes
@@ -1640,7 +1670,7 @@ class NativeTrackerReader:
             admission_reasons: list[str] = []
             if item.get("archived"):
                 admission_reasons.append("archived")
-            if str(item.get("workflow") or "").casefold() not in {
+            if str(evidence["workflow"]["value"] or "").casefold() not in {
                 value.casefold() for value in policy["readyStatuses"]
             }:
                 admission_reasons.append("workflow-not-dispatch-ready")
@@ -1656,18 +1686,19 @@ class NativeTrackerReader:
                 })
                 continue
 
-            packet_revision = self._bounded_string(fields.get("packetRevision"), 200)
-            current_revision = self._bounded_string(fields.get("currentRevision"), 200)
-            is_current = fields.get("isCurrentRevision")
-            qa_revision = self._bounded_string(fields.get("qaEvidenceRevision"), 200)
-            qa_status = self._bounded_string(fields.get("qaStatus"), 100)
-            hold_state = self._bounded_string(fields.get("holdState"), 100)
-            database_route = self._bounded_string(fields.get("databaseRouteState"), 100)
-            custody_state = self._bounded_string(fields.get("custodyState"), 100)
-            survivor_state = self._bounded_string(fields.get("survivorState"), 100)
-            collision_state = self._bounded_string(fields.get("collisionState"), 100)
-            failure_state = self._bounded_string(fields.get("failureState"), 100)
-            superseded_by = self._bounded_string(fields.get("supersededBy"), 200)
+            packet_revision = evidence["packetRevision"]["value"]
+            current_revision = evidence["currentRevision"]["value"]
+            is_current = evidence["isCurrentRevision"]["value"]
+            qa_revision = evidence["qaEvidenceRevision"]["value"]
+            qa_status = evidence["qaStatus"]["value"]
+            hold_state = evidence["holdState"]["value"]
+            database_route = evidence["databaseRouteState"]["value"]
+            custody_state = evidence["custodyState"]["value"]
+            survivor_state = evidence["survivorState"]["value"]
+            collision_state = evidence["collisionState"]["value"]
+            execution_constraint = evidence["executionConstraint"]["value"]
+            failure_state = evidence["failureState"]["value"]
+            superseded_by = evidence["supersededBy"]["value"]
             reasons: list[str] = []
             if packet_revision is None:
                 reasons.append("packet-revision-missing")
@@ -1692,8 +1723,8 @@ class NativeTrackerReader:
                 value.casefold() for value in policy["clearHoldStates"]
             }:
                 reasons.append("hold-not-clear")
-            if item.get("executionConstraint") in {"blocked", "paused", "waiting"}:
-                reasons.append(f"execution-{item['executionConstraint']}")
+            if execution_constraint in {"blocked", "paused", "waiting"}:
+                reasons.append(f"execution-{execution_constraint}")
             if str(database_route or "").casefold() not in {
                 value.casefold() for value in policy["admissibleDatabaseRoutes"]
             }:
@@ -1735,12 +1766,16 @@ class NativeTrackerReader:
                 }.items()
                 if value is None
             ]
-            if evidence_required and missing_fields:
+            missing_signals = list(missing_fields)
+            if not (is_current is True or current_revision is not None):
+                missing_signals.append("revisionCurrentness")
+            if evidence_required and missing_signals:
                 incomplete.append(
                     {
                         "itemId": item["id"],
                         "issueKey": item.get("issueKey"),
                         "missingFields": missing_fields,
+                        "missingLogicalSignals": sorted(missing_signals),
                     }
                 )
             if evidence_required:
@@ -1770,6 +1805,7 @@ class NativeTrackerReader:
                 "itemId": item["id"],
                 "issueKey": item.get("issueKey"),
                 "included": not reasons,
+                "evidence": evidence,
                 "packetRevision": packet_revision,
                 "qaEvidenceRevision": qa_revision,
                 "ancestry": {
@@ -1891,6 +1927,10 @@ class NativeTrackerReader:
                 "retiredRelationshipsExcluded": True,
                 "archivedRecordsExcluded": True,
             },
+            "evidenceMapping": {
+                "fingerprint": evidence_mapping_fingerprint,
+                "signals": sorted(evidence_mapping),
+            },
             "pagination": {"cursor": None, "truncated": False},
             "failOn": dict(query_echo.get("expanded", {}).get("failOn", {})),
         }
@@ -1900,6 +1940,7 @@ class NativeTrackerReader:
                 "expandedParameters": query_receipt["expandedParameters"],
                 "resolvedRoots": query_receipt["resolvedRoots"],
                 "boundaryRules": query_receipt["boundaryRules"],
+                "evidenceMapping": query_receipt["evidenceMapping"],
                 "schemaAdapter": SCHEMA_ADAPTER,
                 "schemaFingerprint": fingerprint,
                 "registryVersion": self._registry["version"],
@@ -2033,6 +2074,105 @@ class NativeTrackerReader:
                 {"receipt": terminal_receipt},
             )
         return fitted
+
+    def _resolve_dispatch_evidence(
+        self,
+        item_id: str,
+        fields: Mapping[str, Any],
+        incident_edges: list[Mapping[str, Any]],
+        mapping: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Resolve only allowlisted dispatch evidence sources with provenance."""
+        tags = sorted(
+            {
+                value.strip()[:100]
+                for value in fields.get("tags", [])
+                if isinstance(value, str) and value.strip()
+            },
+            key=lambda value: (value.casefold(), value),
+        ) if isinstance(fields.get("tags"), list) else []
+        resolved: dict[str, dict[str, Any]] = {}
+        for signal in sorted(mapping):
+            sources = mapping[signal]["sources"]
+            result: dict[str, Any] = {"value": None, "source": None}
+            for source in sources:
+                kind = source["kind"]
+                if kind == "field":
+                    raw = fields.get(source["field"])
+                    value = (
+                        raw if isinstance(raw, bool) else None
+                    ) if signal == "isCurrentRevision" else self._bounded_string(raw, 200)
+                    if value is not None:
+                        result = {
+                            "value": value,
+                            "source": {"kind": "field", "field": source["field"]},
+                        }
+                        break
+                elif kind == "tag":
+                    match = next(
+                        (tag for tag in tags if tag.casefold() == source["tag"].casefold()),
+                        None,
+                    )
+                    if match is not None:
+                        result = {
+                            "value": source["value"],
+                            "source": {"kind": "tag", "tag": match},
+                        }
+                        break
+                elif kind == "tag-prefix":
+                    prefix = source["prefix"]
+                    match = next(
+                        (
+                            tag for tag in tags
+                            if tag.casefold().startswith(prefix.casefold())
+                            and self._bounded_string(tag[len(prefix):], 200) is not None
+                        ),
+                        None,
+                    )
+                    if match is not None:
+                        result = {
+                            "value": self._bounded_string(match[len(prefix):], 200),
+                            "source": {
+                                "kind": "tag-prefix",
+                                "prefix": prefix,
+                                "tag": match,
+                            },
+                        }
+                        break
+                elif kind == "relationship":
+                    match = next(
+                        (
+                            edge for edge in incident_edges
+                            if edge.get("relationshipType") == source["relationshipType"]
+                            and edge.get("state") == source["state"]
+                            and (
+                                source["direction"] == "either"
+                                or (
+                                    source["direction"] == "outgoing"
+                                    and edge.get("sourceId") == item_id
+                                )
+                                or (
+                                    source["direction"] == "incoming"
+                                    and edge.get("targetId") == item_id
+                                )
+                            )
+                        ),
+                        None,
+                    )
+                    if match is not None:
+                        result = {
+                            "value": source["value"],
+                            "source": {
+                                "kind": "relationship",
+                                "relationshipId": match["id"],
+                                "relationshipType": match["relationshipType"],
+                                "direction": source["direction"],
+                                "state": match["state"],
+                            },
+                        }
+                        break
+            resolved[signal] = result
+        return resolved
 
     @staticmethod
     def _dispatch_ancestry_rows(

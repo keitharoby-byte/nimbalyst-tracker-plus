@@ -28,7 +28,7 @@ class RegistryTests(unittest.TestCase):
             ).hexdigest(),
             "extensionVersion": "9.9.9",
             "adapterVersion": 3,
-            "registryVersion": 3,
+            "registryVersion": 4,
             "files": files,
         }
         (directory / "bundle-manifest.json").write_text(
@@ -42,7 +42,7 @@ class RegistryTests(unittest.TestCase):
             root = Path(directory)
             manifest = self._bundle_fixture(root)
             registry, diagnostics = _load_bundle_from(root, require_manifest=True)
-            self.assertEqual(registry["version"], 3)
+            self.assertEqual(registry["version"], 4)
             self.assertEqual(diagnostics["verificationState"], "verified")
             self.assertEqual(diagnostics["extensionVersion"], "9.9.9")
             self.assertEqual(diagnostics["adapterVersion"], 3)
@@ -63,7 +63,7 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(error.code, "READER_RESTART_REQUIRED")
             self.assertEqual(error.details["extensionVersion"], "9.9.9")
             self.assertEqual(error.details["adapterVersion"], 3)
-            self.assertEqual(error.details["registryVersion"], 3)
+            self.assertEqual(error.details["registryVersion"], 4)
             self.assertTrue(error.details["assetPath"].endswith("saved-queries.json"))
             self.assertEqual(len(error.details["expectedHash"]), 64)
             self.assertEqual(len(error.details["actualHash"]), 64)
@@ -94,6 +94,31 @@ class RegistryTests(unittest.TestCase):
                 self.assertFalse(active)
                 self.assertIsNotNone(error)
                 self.assertEqual(registry["caps"]["queryLimitMax"], 200)
+
+    def test_invalid_dispatch_evidence_override_is_ignored_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".nimbalyst").mkdir()
+            (root / ".nimbalyst" / "tracker-plus.registry.json").write_text(json.dumps({
+                "dispatchEvidence": {
+                    "qaStatus": {
+                        "sources": [{
+                            "kind": "tag",
+                            "tag": "qa-signed-off",
+                            "value": True,
+                        }],
+                    },
+                },
+            }), encoding="utf-8")
+
+            registry, active, error, _registry_hash = effective_registry(root)
+
+            self.assertFalse(active)
+            self.assertIsNotNone(error)
+            self.assertEqual(
+                registry["dispatchEvidence"]["qaStatus"]["sources"],
+                [{"kind": "field", "field": "qaStatus"}],
+            )
 
     def test_external_query_catalog_can_replace_add_and_remove_queries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

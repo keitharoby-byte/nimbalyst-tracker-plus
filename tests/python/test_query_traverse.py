@@ -70,6 +70,45 @@ class QueryTraverseTests(unittest.TestCase):
         if contribution_role: data["contributionRole"] = contribution_role
         self._insert(connection, item_id, issue_key, "timeline-link", data)
 
+    def _write_registry_override(self, payload: dict[str, object]) -> None:
+        path = Path(self.workspace) / ".nimbalyst" / "tracker-plus.registry.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def _mapped_dispatch_override(self) -> dict[str, object]:
+        policy = json.loads(json.dumps(self.reader._registry["dispatchPolicy"]))
+        policy["readyStatuses"] = ["to-do"]
+        return {
+            "dispatchPolicy": policy,
+            "dispatchEvidence": {
+                "packetRevision": {"sources": [{"kind": "tag-prefix", "prefix": "packet-revision:"}]},
+                "currentRevision": {"sources": [{"kind": "tag-prefix", "prefix": "current-revision:"}]},
+                "qaEvidenceRevision": {"sources": [{"kind": "field", "field": "qaCheckRevision"}]},
+                "qaStatus": {"sources": [{"kind": "tag", "tag": "qa-signed-off", "value": "passed"}]},
+                "holdState": {"sources": [{"kind": "tag", "tag": "hold-clear", "value": "clear"}]},
+                "databaseRouteState": {"sources": [{"kind": "field", "field": "routeState"}]},
+                "custodyState": {"sources": [{"kind": "tag", "tag": "custody-vacant", "value": "vacant"}]},
+                "survivorState": {"sources": [{"kind": "field", "field": "survivor"}]},
+                "collisionState": {"sources": [{"kind": "tag", "tag": "collision-clear", "value": "clear"}]},
+            },
+        }
+
+    @staticmethod
+    def _mapped_dispatch_fields() -> dict[str, object]:
+        return {
+            "status": "to-do",
+            "tags": [
+                "packet-revision:rev-configured",
+                "current-revision:rev-configured",
+                "qa-signed-off",
+                "hold-clear",
+                "custody-vacant",
+                "collision-clear",
+            ],
+            "qaCheckRevision": "rev-configured",
+            "routeState": "approved",
+            "survivor": "unique",
+        }
+
     def test_saved_role_query_and_parameterized_sql_value(self) -> None:
         result = self.reader.query_items({"workspacePath": self.workspace, "savedQuery": {"id": "role-active-work-and-attention", "params": {"roleId": "coordinator"}}})
         self.assertEqual([node["id"] for node in result["nodes"]], ["launch-1", "member-1"])
@@ -1261,7 +1300,237 @@ class QueryTraverseTests(unittest.TestCase):
             "dispatch-incomplete",
         )
 
+    def test_dispatch_evidence_mapping_supports_fields_tags_prefixes_and_provenance(self) -> None:
+        self._write_registry_override(self._mapped_dispatch_override())
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "dispatch-mapped", "NIM-DISPATCH-MAPPED", "task", {
+                "title": "Mapped packet",
+                **self._mapped_dispatch_fields(),
+            })
+            self._link(
+                connection,
+                "dispatch-mapped-membership",
+                "REL-DISPATCH-MAPPED",
+                "dispatch-mapped",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        })
+
+        self.assertEqual([node["id"] for node in result["nodes"]], ["dispatch-mapped"])
+        receipt = result["receipts"][0]
+        self.assertTrue(receipt["included"])
+        self.assertEqual(receipt["evidence"]["workflow"]["value"], "to-do")
+        self.assertEqual(receipt["evidence"]["packetRevision"]["source"]["kind"], "tag-prefix")
+        self.assertEqual(receipt["evidence"]["qaStatus"], {
+            "value": "passed",
+            "source": {"kind": "tag", "tag": "qa-signed-off"},
+        })
+        self.assertEqual(receipt["evidence"]["databaseRouteState"]["source"], {
+            "kind": "field",
+            "field": "routeState",
+        })
+        self.assertEqual(set(receipt["evidence"]), set(self.reader._registry["dispatchEvidence"]))
+        self.assertEqual(len(result["query"]["evidenceMapping"]["fingerprint"]), 64)
+
+    def test_dispatch_evidence_mapping_supports_normalized_relationship_sources(self) -> None:
+        self._write_registry_override({
+            "dispatchEvidence": {
+                "qaStatus": {
+                    "sources": [{
+                        "kind": "relationship",
+                        "relationshipType": "evidences",
+                        "direction": "outgoing",
+                        "state": "active",
+                        "value": "passed",
+                    }],
+                },
+            },
+        })
+        ready = {
+            "status": "ready",
+            "packetRevision": "rev-edge",
+            "currentRevision": "rev-edge",
+            "qaEvidenceRevision": "rev-edge",
+            "holdState": "clear",
+            "databaseRouteState": "approved",
+            "custodyState": "vacant",
+            "survivorState": "unique",
+            "collisionState": "clear",
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "dispatch-relationship", "NIM-DISPATCH-REL", "task", {
+                "title": "Relationship-evidenced packet",
+                **ready,
+            })
+            self._insert(connection, "qa-evidence", "EVIDENCE-QA", "document", {
+                "title": "QA evidence",
+                "status": "active",
+            })
+            self._link(
+                connection,
+                "dispatch-relationship-membership",
+                "REL-DISPATCH-REL-MEMBER",
+                "dispatch-relationship",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            self._link(
+                connection,
+                "dispatch-relationship-evidence",
+                "REL-DISPATCH-REL-EVIDENCE",
+                "dispatch-relationship",
+                "qa-evidence",
+                "evidences",
+            )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        })
+
+        self.assertEqual([node["id"] for node in result["nodes"]], ["dispatch-relationship"])
+        self.assertEqual(result["receipts"][0]["evidence"]["qaStatus"], {
+            "value": "passed",
+            "source": {
+                "kind": "relationship",
+                "relationshipId": "dispatch-relationship-evidence",
+                "relationshipType": "evidences",
+                "direction": "outgoing",
+                "state": "active",
+            },
+        })
+
+    def test_dispatch_mapped_missing_signal_returns_terminal_fail_closed_receipt(self) -> None:
+        self._write_registry_override(self._mapped_dispatch_override())
+        fields = self._mapped_dispatch_fields()
+        fields["tags"] = [tag for tag in fields["tags"] if tag != "qa-signed-off"]
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "dispatch-mapped-incomplete", "NIM-DISPATCH-MISSING", "task", {
+                "title": "Mapped incomplete packet",
+                **fields,
+            })
+            self._link(
+                connection,
+                "dispatch-mapped-incomplete-membership",
+                "REL-DISPATCH-MISSING",
+                "dispatch-mapped-incomplete",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {
+                    "id": "dispatch-eligible-work-v1",
+                    "params": {"launchKeys": ["RELEASE-A"]},
+                },
+            })
+
+        self.assertEqual(raised.exception.code, "DISPATCH_EVIDENCE_INCOMPLETE")
+        receipt = raised.exception.details["receipt"]
+        self.assertEqual(receipt["candidates"], [])
+        missing = receipt["incompleteEvidence"][0]
+        self.assertIn("qaStatus", missing["missingLogicalSignals"])
+        self.assertNotIn("launchTotals", receipt)
+
+    def test_dispatch_waiting_roots_require_explicit_policy_and_terminal_roots_stay_excluded(self) -> None:
+        policy = json.loads(json.dumps(self.reader._registry["dispatchPolicy"]))
+        policy["eligibleLaunchStatuses"].append("waiting")
+        self._write_registry_override({"dispatchPolicy": policy})
+        ready = {
+            "status": "ready",
+            "packetRevision": "rev-waiting",
+            "currentRevision": "rev-waiting",
+            "qaEvidenceRevision": "rev-waiting",
+            "qaStatus": "passed",
+            "holdState": "clear",
+            "databaseRouteState": "approved",
+            "custodyState": "vacant",
+            "survivorState": "unique",
+            "collisionState": "clear",
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            for item_id, issue_key, launch_key, status in (
+                ("launch-waiting", "LAUNCH-WAITING", "WAITING", "waiting"),
+                ("launch-done", "LAUNCH-DONE", "DONE", "done"),
+                ("launch-retired", "LAUNCH-RETIRED", "RETIRED", "retired"),
+                ("launch-archived", "LAUNCH-ARCHIVED", "ARCHIVED", "active"),
+            ):
+                self._insert(connection, item_id, issue_key, "launch", {
+                    "title": launch_key,
+                    "launchKey": launch_key,
+                    "status": status,
+                    "owner": "Coordinator",
+                    "audience": ["internal"],
+                    "scopeRevision": "1",
+                    "entryCriteria": [{}],
+                    "exitCriteria": [{}],
+                })
+            self._insert(connection, "dispatch-waiting", "NIM-DISPATCH-WAITING", "task", {
+                "title": "Waiting-root packet",
+                **ready,
+            })
+            self._link(
+                connection,
+                "dispatch-waiting-membership",
+                "REL-DISPATCH-WAITING",
+                "dispatch-waiting",
+                "launch-waiting",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.execute(
+                "UPDATE tracker_items SET archived=1 WHERE id='launch-archived'"
+            )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["WAITING"]},
+            },
+        })
+        self.assertEqual([node["id"] for node in result["nodes"]], ["dispatch-waiting"])
+        for launch_key in ("DONE", "RETIRED", "ARCHIVED"):
+            with self.subTest(launch_key=launch_key), self.assertRaises(ReaderError) as raised:
+                self.reader.traverse_graph({
+                    "workspacePath": self.workspace,
+                    "savedQuery": {
+                        "id": "dispatch-eligible-work-v1",
+                        "params": {"launchKeys": [launch_key]},
+                    },
+                })
+            self.assertEqual(raised.exception.code, "ROOT_NOT_FOUND")
+
     def test_dispatch_unscoped_requires_explicit_registry_admission(self) -> None:
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {
+                    "id": "dispatch-eligible-work-v1",
+                    "params": {"includeUnscoped": True},
+                },
+            })
+        self.assertEqual(raised.exception.code, "UNSCOPED_WORK_NOT_CONFIGURED")
         policy = dict(self.reader._registry["dispatchPolicy"])
         policy["admittedUnscopedTypes"] = ["bug"]
         override_path = (

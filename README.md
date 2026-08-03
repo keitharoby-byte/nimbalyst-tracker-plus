@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.7.0 is Windows-first and was validated with Nimbalyst 0.71.3. Because
+Version 0.8.0 is Windows-first and was validated with Nimbalyst 0.71.3. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,17 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.7.0
+## What's new in 0.8.0
+
+- Configure the trusted source for every dispatch-evidence signal through
+  `.nimbalyst/tracker-plus.registry.json`. Field, exact-tag, tag-prefix, and
+  normalized-relationship sources are allowlisted, provenance is included in
+  detailed receipts, and invalid mappings are ignored atomically.
+- Fail closed when a configured signal is missing, include its logical name in
+  the terminal receipt, and reject `includeUnscoped=true` when no unscoped type
+  is explicitly admitted.
+
+## Previously in 0.7.0
 
 - Compose a validated root predicate and a typed relationship traversal in one
   bounded saved query. Installers can define composed templates in
