@@ -485,6 +485,46 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(snapshot["source"]["membership"], {"memberCount": 2, "boundaryCount": 1})
         self.assertFalse(snapshot["page"]["queryTruncated"])
 
+    def test_launch_snapshot_surfaces_nested_lane_timeline_items_as_boundary(self) -> None:
+        # Regression for issue #23: registered timeline-item walk steps that are
+        # part-of-launch members of a nested lane (itself a launch container)
+        # must still be projected into the launch snapshot as boundary context,
+        # not silently dropped.
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "lane-a", "LANE-A", "launch", {
+                "title": "Alpha lane", "launchKey": "LANE-A", "status": "active",
+            })
+            self._link(connection, "link-lane-a", "REL-LANE-A", "lane-a", "launch-1", "part-of-launch", scope_role="core")
+            for index in (1, 2, 3):
+                self._insert(connection, f"walk-{index}", f"WALK-{index}", "timeline-item", {
+                    "title": f"Walk step {index}", "status": "waiting", "priority": "critical",
+                })
+                self._link(connection, f"link-walk-{index}", f"REL-WALK-{index}", f"walk-{index}", "lane-a", "part-of-launch", scope_role="core")
+            connection.commit()
+
+        snapshot = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 50,
+            "launch": "RELEASE-A",
+        })
+
+        walk_ids = {"walk-1", "walk-2", "walk-3"}
+        projected = {item["id"] for item in snapshot["items"]}
+        self.assertTrue(walk_ids.issubset(projected))
+        for item in snapshot["items"]:
+            if item["id"] in walk_ids:
+                self.assertEqual(item["status"], "waiting")
+                self.assertTrue(item["boundary"])
+                self.assertFalse(item["launchMember"])
+        # Nested lane members are context, not launch members or milestones.
+        self.assertNotIn("walk-1", {item["id"] for item in snapshot["milestones"]})
+        discovery = snapshot["source"]["schemaDiscovery"]
+        self.assertEqual(discovery["state"], "registered")
+        self.assertEqual(discovery["liveRowCount"], 3)
+        self.assertEqual(discovery["projectedRowCount"], 3)
+        self.assertTrue(discovery["allLiveRowsProjected"])
+
     def test_tag_seeded_snapshots_are_independent_and_include_boundaries(self) -> None:
         alpha = self.reader.timeline_snapshot({
             "workspacePath": self.workspace,

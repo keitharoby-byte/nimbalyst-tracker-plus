@@ -597,10 +597,14 @@ class NativeTrackerReader:
         return fitted
 
     def _launch_timeline_snapshot(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
-        relationship_types = [
-            value for value in self._registry["relationshipTypes"]
-            if value != "part-of-launch"
-        ]
+        # Membership pulls direct part-of-launch members of the root launch at
+        # depth one. Expand keeps part-of-launch as well so that members which
+        # are themselves launch containers (e.g. lanes) surface their own
+        # nested part-of-launch members as one-hop boundary context instead of
+        # silently dropping registered timeline-item walk steps. Nested members
+        # remain boundary nodes: they are excluded from launch rollups and never
+        # promoted to direct launch membership.
+        relationship_types = list(self._registry["relationshipTypes"])
         graph = self.traverse_graph({
             "workspacePath": parsed["workspacePath"],
             "roots": [parsed["launch"]],

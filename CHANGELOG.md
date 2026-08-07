@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Fix launch-rooted timeline projections dropping registered `timeline-item`
+  rows that are `part-of-launch` members of a nested lane (a member that is
+  itself a launch container). The launch snapshot now keeps `part-of-launch`
+  in its one-hop expand stage, so nested lane members surface as boundary
+  context instead of being silently suppressed. They remain boundary nodes:
+  excluded from launch rollups and never promoted to direct launch membership.
+  (#23)
 - Add a copy-ready external query catalog covering predicate, traversal, and
   composed templates, and link it from installation, agent, and release
   documentation.
