@@ -3398,15 +3398,10 @@ class NativeTrackerReader:
         if cycle_nodes:
             findings.append(self._finding("membership-cycle", "error", "Active launch memberships contain a cycle.", item_ids=sorted(cycle_nodes), relationship_ids=[edge["id"] for edge in active_memberships if edge["sourceId"] in cycle_nodes and edge["targetId"] in cycle_nodes]))
 
-        if active_memberships:
-            member_ids = {edge["sourceId"] for edge in active_memberships}
-            for launch in launches:
-                key = str(launch.get("launchKey") or "").lower()
-                if not key:
-                    continue
-                for item in items:
-                    if item["id"] != launch["id"] and key in {str(tag).lower() for tag in item.get("tags", [])} and item["id"] not in member_ids:
-                        findings.append(self._finding("tag-membership-mismatch", "warning", f"{item.get('issueKey') or item['id']} is tagged {launch.get('launchKey')} but has no active launch membership.", item_ids=[item["id"], launch["id"]]))
+        # Launch-key tags are legacy selection and migration metadata. They do
+        # not create membership and therefore cannot contradict the native
+        # graph or affect validation. Active typed part-of-launch edges remain
+        # the sole membership and rollup authority.
         return findings
 
     def _apply_launch_rollups(self, items: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
