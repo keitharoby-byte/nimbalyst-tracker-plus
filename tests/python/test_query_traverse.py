@@ -462,6 +462,60 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(launch["launchRollup"]["activeHardBlockers"], 1)
         self.assertEqual(result["validation"]["state"], "pass")
 
+    def test_legacy_launch_tags_do_not_change_membership_rollups_or_validation(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "launch-2", "LAUNCH-RELEASE-B", "launch", {
+                "title": "Second launch", "launchKey": "RELEASE-B", "status": "draft",
+            })
+            self._insert(connection, "legacy-tag-only", "ITEM-LEGACY-TAG", "task", {
+                "title": "Migration-tagged only", "status": "done",
+                "tags": ["release-a"],
+            })
+            self._insert(connection, "cross-launch-member", "ITEM-CROSS-LAUNCH", "task", {
+                "title": "Member of A tagged for B", "status": "done",
+                "tags": ["release-b"],
+            })
+            self._link(
+                connection,
+                "link-cross-launch-member",
+                "REL-CROSS-LAUNCH",
+                "cross-launch-member",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "type", "op": "eq", "value": "launch"},
+        })
+
+        launches = {node["id"]: node for node in result["nodes"]}
+        self.assertEqual(result["validation"]["state"], "pass")
+        self.assertNotIn(
+            "tag-membership-mismatch",
+            {finding["code"] for finding in result["validation"]["findings"]},
+        )
+        # Only the two typed core members contribute to RELEASE-A. The
+        # completed tag-only migration item must not increase its rollup.
+        self.assertEqual(launches["launch-1"]["launchRollup"]["derivedProgress"], 50)
+        # Membership in RELEASE-A must not make a RELEASE-B tag authoritative.
+        self.assertEqual(launches["launch-2"]["launchRollup"]["derivedProgress"], 0)
+
+        release_b = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["RELEASE-B"],
+            "membership": {
+                "relationshipTypes": ["part-of-launch"],
+                "direction": "incoming",
+                "status": ["active"],
+                "maxDepth": 1,
+            },
+        })
+        self.assertEqual([node["id"] for node in release_b["nodes"]], ["launch-2"])
+        self.assertEqual(release_b["validation"]["state"], "pass")
+
     def test_launch_traversal_stops_at_boundary_nodes(self) -> None:
         with closing(sqlite3.connect(self.db_path)) as connection:
             self._insert(connection, "beyond-prior", "M-BEFORE-ALPHA", "milestone", {"title": "Earlier launch", "status": "active"})

@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Stop legacy launch-key migration tags from producing non-PASS native timeline
+  validation. Active typed `part-of-launch` relationships remain the sole
+  membership and rollup authority, including when an item belongs to one launch
+  while retaining another launch's migration tag. (#25)
 - Fix launch-rooted timeline projections dropping registered `timeline-item`
   rows that are `part-of-launch` members of a nested lane (a member that is
   itself a launch container). The launch snapshot now keeps `part-of-launch`

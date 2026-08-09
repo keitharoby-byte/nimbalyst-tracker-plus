@@ -102,6 +102,9 @@ Every derived color has a rationale array in the snapshot.
 
 ## Governance validation
 
+- Active typed `part-of-launch` relationships are the sole launch membership
+  and rollup authority. Legacy launch-key tags remain usable for selection and
+  migration, but do not create membership or produce mismatch findings.
 - Every launch-scoped item has exactly one primary `contributes-to` edge to a
   milestone; secondary contributions remain allowed.
 - Every MR has exactly one `reviews` edge to a milestone, an owner, and explicit
