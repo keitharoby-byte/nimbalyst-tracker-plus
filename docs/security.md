@@ -37,8 +37,11 @@ backends disabled until the user approves their first-use native-code prompts.
   atomically. Locked vocabulary/cap keys or malformed query definitions leave
   bundled defaults active and surface a warning in every response.
 - Comment bodies are capped at 20,000 Unicode characters. Tracker bodies are
-  capped at 100,000 characters. The serialized result is capped below the
-  512-KiB process-line ceiling.
+  capped at 100,000 characters. Each serialized result page is capped below the
+  512-KiB process-line ceiling. Predicate queries and opt-in standard
+  traversals can retrieve a complete logical result through opaque,
+  identity-bound continuation cursors without raising that per-response limit.
+  Dispatch and composed traversals remain atomic and fail closed on truncation.
 - The helper rejects input lines over 64 KiB, times out after five seconds,
   restarts at most once after a transport failure, and fails closed on unknown
   methods or schema drift.

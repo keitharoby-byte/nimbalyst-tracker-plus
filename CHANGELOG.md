@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.8.1 - 2026-08-10
+
+- Make complete predicate-query retrieval explicit: responses now distinguish
+  complete results from continuable pages, and the MCP contract requires agents
+  to follow opaque cursors automatically across limit or response-size
+  truncation unless the user requested only one page. Standard graph traversals
+  can now opt into the same complete-result workflow, treating node and edge
+  caps as page sizes while binding cursors to the selected graph; dispatch and
+  composed traversals remain atomic and fail closed.
 - Stop legacy launch-key migration tags from producing non-PASS native timeline
   validation. Active typed `part-of-launch` relationships remain the sole
   membership and rollup authority, including when an item belongs to one launch

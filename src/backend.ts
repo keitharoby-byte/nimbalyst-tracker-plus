@@ -23,7 +23,7 @@ const COMMENT_ALLOWED_KEYS = new Set(['trackerId', 'limit', 'cursor', 'since', '
 const TIMELINE_ALLOWED_KEYS = new Set(['outputPath', 'includeUnscheduled', 'maxItems', 'from', 'to', 'launch', 'selector']);
 const REPORT_ALLOWED_KEYS = new Set(['outputPath', 'milestoneId', 'asOf', 'lookaheadDays', 'maxItems']);
 const QUERY_ALLOWED_KEYS = new Set(['where', 'savedQuery', 'sort', 'limit', 'cursor', 'includeArchived', 'includeRelationshipRecords', 'includeTotalCount']);
-const TRAVERSE_ALLOWED_KEYS = new Set(['roots', 'membership', 'expand', 'nodeWhere', 'limits', 'failOn', 'savedQuery']);
+const TRAVERSE_ALLOWED_KEYS = new Set(['roots', 'membership', 'expand', 'nodeWhere', 'limits', 'failOn', 'savedQuery', 'paginate', 'cursor']);
 const MAX_EXISTING_TIMELINE_BYTES = 1024 * 1024;
 
 const PAGINATION_PROPERTIES = {
@@ -166,7 +166,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
   },
   {
     name: TOOL_QUERY,
-    description: 'Run a bounded, cursor-paged predicate or saved query over current-workspace native tracker items. Relationship records are excluded unless explicitly requested. This tool never writes tracker data.',
+    description: 'Run a bounded, cursor-paged predicate or saved query over current-workspace native tracker items. Completeness contract: when page.continuationRequired is true, automatically repeat the identical query with cursor=page.nextCursor and aggregate every page until continuationRequired is false, unless the user explicitly requested only one page. A truncated page is not a complete result. Relationship records are excluded unless explicitly requested. This tool never writes tracker data.',
     scope: 'global',
     inputSchema: {
       type: 'object',
@@ -175,7 +175,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
         savedQuery: { type: 'object', description: 'Versioned registry query id and parameter object.' },
         sort: { type: 'array', items: { type: 'object' } },
         limit: { type: 'number', default: 50, minimum: 1, maximum: 200 },
-        cursor: { type: 'string' },
+        cursor: { type: 'string', description: 'Opaque page.nextCursor from the immediately preceding page. Keep every other query argument identical and continue until page.continuationRequired is false.' },
         includeArchived: { type: 'boolean', default: false },
         includeRelationshipRecords: { type: 'boolean', default: false },
         includeTotalCount: { type: 'boolean', default: true },
@@ -185,7 +185,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
   },
   {
     name: TOOL_TRAVERSE,
-    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved query. Includes the fail-closed dispatch-eligible-work-v1 candidate contract with auditable inclusion and exclusion receipts. This tool never writes tracker data.',
+    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved query. If a standard traversal returns RESULT_TRUNCATED, retry the identical request with paginate=true; then automatically repeat it with cursor=page.nextCursor and aggregate nodes, boundaryNodes, and edges until page.continuationRequired is false. Never interpret one paged fragment as the complete graph. Dispatch and composed modes remain fail closed and do not support pagination. This tool never writes tracker data.',
     scope: 'global',
     inputSchema: {
       type: 'object',
@@ -197,6 +197,8 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
         limits: { type: 'object' },
         failOn: { type: 'object' },
         savedQuery: { type: 'object' },
+        paginate: { type: 'boolean', default: false, description: 'For standard traversals, treat maxNodes and maxEdges as safe page sizes and expose an opaque continuation cursor instead of failing on truncation.' },
+        cursor: { type: 'string', description: 'Opaque page.nextCursor from the preceding paged traversal. Keep every other argument identical.' },
       },
       additionalProperties: false,
     },
@@ -370,8 +372,16 @@ function validatedGraphParams(
         throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: `${flag} must be a boolean.` });
       }
     }
-  } else if (hasDirect && (!Array.isArray(params.roots) || params.roots.length < 1 || params.roots.length > 8 || params.roots.some((value) => typeof value !== 'string' || !value.trim()))) {
-    throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'roots must contain 1 through 8 non-empty strings.' });
+  } else {
+    if (hasDirect && (!Array.isArray(params.roots) || params.roots.length < 1 || params.roots.length > 8 || params.roots.some((value) => typeof value !== 'string' || !value.trim()))) {
+      throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'roots must contain 1 through 8 non-empty strings.' });
+    }
+    if (params.paginate !== undefined && typeof params.paginate !== 'boolean') {
+      throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'paginate must be a boolean.' });
+    }
+    if (params.cursor !== undefined && (params.paginate !== true || typeof params.cursor !== 'string' || !params.cursor)) {
+      throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'cursor requires paginate=true and an opaque non-empty cursor.' });
+    }
   }
   return { ...params, workspacePath };
 }

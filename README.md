@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.8.0 is Windows-first and was validated with Nimbalyst 0.71.3. Because
+Version 0.8.1 is Windows-first and was validated with Nimbalyst 0.71.3. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,17 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.8.0
+## What's new in 0.8.1
+
+- Retrieve complete predicate results by automatically following explicit
+  continuation cursors across ordinary and response-size-truncated pages.
+- Retry truncated standard graph traversals with `paginate: true`, then
+  aggregate identity-bound node and edge pages without raising the per-response
+  safety limit.
+- Keep legacy launch tags non-blocking and preserve nested-lane timeline items
+  as boundary context while typed relationships remain authoritative.
+
+## Previously in 0.8.0
 
 - Configure the trusted source for every dispatch-evidence signal through
   `.nimbalyst/tracker-plus.registry.json`. Field, exact-tag, tag-prefix, and
@@ -206,9 +216,11 @@ provide copy-ready external predicate, traversal, and composed query templates.
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.
 - `native_tracker_query` runs bounded cursor-paged predicates or saved role
-  queries.
+  queries and explicitly requires automatic continuation until the full result
+  set has been retrieved, unless the caller requested only one page.
 - `native_tracker_traverse` returns rooted members, edges, boundary context,
-  launch rollups, validation, provenance, and fail-closed dispatch candidates.
+  launch rollups, validation, provenance, fail-closed dispatch candidates, and
+  opt-in cursor paging for complete standard graphs that exceed one response.
 - `native_tracker_sync_timeline` projects current native tracker data into a
   workspace-relative `.ntimeline` document and returns validation and
   prior/current projection deltas in its sync receipt.

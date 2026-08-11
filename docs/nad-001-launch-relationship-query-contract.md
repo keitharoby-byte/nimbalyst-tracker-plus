@@ -88,9 +88,13 @@ installation-specific tags.
 ### Results are bounded and auditable
 
 Predicate queries use allowlisted fields/operators, parameterized SQL,
-deterministic sorting, opaque cursors, and bounded pages. Traversal uses bounded
-breadth-first stages with explicit roots, membership, expansion, boundary,
-node-filter, and fail-on rules.
+deterministic sorting, opaque cursors, and bounded pages. Standard traversal
+uses bounded breadth-first stages with explicit roots, membership, expansion,
+boundary, node-filter, and fail-on rules. When one standard traversal result
+exceeds a node, edge, or response page, an opt-in cursor binds continuation to
+the selected node/edge identity so agents can aggregate the complete graph
+without raising the per-response cap. Dispatch and composed traversals remain
+atomic and fail closed instead of paging.
 
 Receipts include pagination/truncation, validation, resolved roots, boundary
 rules, schema adapter/fingerprint, registry version/hash, watermark, expanded
