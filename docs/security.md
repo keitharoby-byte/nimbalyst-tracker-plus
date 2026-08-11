@@ -52,6 +52,10 @@ backends disabled until the user approves their first-use native-code prompts.
   and cannot be symbolic links. Writes use a temporary file followed by rename.
 - The generation tools write only projection/report files. SQLite remains open
   in read-only and query-only modes for the entire operation.
+- Dispatch role attention tags affect routing only. They do not infer launch
+  scope or eligibility, and launch validation reads the selected roots' active
+  typed membership graph independently of candidate admission. Missing
+  endpoints, lifecycle evidence, or row evidence remain terminal.
 
 ## Residual risk
 

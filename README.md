@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.8.1 is Windows-first and was validated with Nimbalyst 0.71.3. Because
+Version 0.8.2 is Windows-first and was validated with Nimbalyst 0.71.3. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,14 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.8.1
+## What's new in 0.8.2
+
+- Route dispatch work by configured role attention tags as well as owner
+  aliases, preserving detailed fail-closed evidence receipts for routed rows.
+- Validate selected launch roots from their actual active membership graph,
+  even when workflow, role, or scope admission yields zero candidate rows.
+
+## Previously in 0.8.1
 
 - Retrieve complete predicate results by automatically following explicit
   continuation cursors across ordinary and response-size-truncated pages.
