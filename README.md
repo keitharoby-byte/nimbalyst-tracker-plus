@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.8.2 is Windows-first and was validated with Nimbalyst 0.71.3. Because
+Version 0.9.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,16 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.8.2
+## What's new in 0.9.0
+
+- Make `.nimbalyst/tracker-plus.queries.json` the exact saved-query inventory
+  for each workspace; Tracker+ no longer injects default queries.
+- Move six neutral, editable query templates into the copy-ready example
+  catalog while preserving stable query IDs and generic composed queries.
+- Remove the project-specific walk-readiness projection and its dependency on
+  optional workflow fields.
+
+## Previously in 0.8.2
 
 - Route dispatch work by configured role attention tags as well as owner
   aliases, preserving detailed fail-closed evidence receipts for routed rows.
@@ -212,13 +221,14 @@ New agents should start with the complete [Tracker+ agent guide](docs/agent-guid
 It includes exact arguments, safe mutation/resync patterns, normalized-link
 examples, filter behavior, PR references, and recovery steps.
 Its [saved-query and role-search catalog](docs/agent-guide.md#saved-query-and-role-search-catalog)
-documents every bundled template, role expansion, copy-paste invocation,
+documents every copy-ready workspace template, role expansion, invocation,
 external query-catalog rules, caps, and failure behavior.
 The dedicated [role guide](docs/roles.md) explains query roles versus graph
 roles and includes neutral examples plus a ready-to-copy installer registry.
 The [installation guide](docs/installation.md#workspace-configuration) and
 [`examples/tracker-plus.queries.json`](examples/tracker-plus.queries.json)
-provide copy-ready external predicate, traversal, and composed query templates.
+provide copy-ready external predicate and traversal query templates; the agent
+guide documents how to define generic composed queries.
 
 - `native_tracker_list_comments` returns bounded, paginated comment history.
 - `native_tracker_get_with_comments` returns tracker orientation and comments.

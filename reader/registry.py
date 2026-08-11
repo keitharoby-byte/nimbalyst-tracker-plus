@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover
 
 LOCKED_OVERRIDE_KEYS = {"relationshipTypes", "scopeRoles", "executableTypes", "caps", "version"}
 OVERRIDABLE_KEYS = {
-    "terminalStatuses", "roles", "savedQueries", "dispatchPolicy", "dispatchEvidence",
+    "terminalStatuses", "roles", "dispatchPolicy", "dispatchEvidence",
 }
 BUNDLE_MANIFEST = "bundle-manifest.json"
 BUNDLE_FORMAT_VERSION = 1
@@ -75,7 +75,7 @@ def _validate_saved_queries(value: Any) -> bool:
     return True
 
 
-def _validate_query_catalog(value: Any, *, allow_removal: bool = False) -> bool:
+def _validate_query_catalog(value: Any) -> bool:
     if (
         not isinstance(value, dict)
         or not isinstance(value.get("version"), int)
@@ -84,13 +84,7 @@ def _validate_query_catalog(value: Any, *, allow_removal: bool = False) -> bool:
         or set(value) != {"version", "queries"}
     ):
         return False
-    queries = value["queries"]
-    if allow_removal:
-        active = {key: query for key, query in queries.items() if query is not None}
-        if not all(isinstance(key, str) and key for key in queries):
-            return False
-        return _validate_saved_queries(active)
-    return _validate_saved_queries(queries)
+    return _validate_saved_queries(value["queries"])
 
 
 def _validate_dispatch_policy(value: Any) -> bool:
@@ -403,8 +397,6 @@ def _validate_override(value: Any, relationship_types: set[str]) -> None:
         for role in roles.values():
             if not isinstance(role, dict) or not _string_list(role.get("ownerAliases")) or not _string_list(role.get("attentionTags", []), nonempty=False):
                 raise ValueError("override role is invalid")
-    if "savedQueries" in value and not _validate_saved_queries(value["savedQueries"]):
-        raise ValueError("override savedQueries are invalid")
     if "dispatchPolicy" in value and not _validate_dispatch_policy(value["dispatchPolicy"]):
         raise ValueError("override dispatchPolicy is invalid")
     if "dispatchEvidence" in value and not _validate_dispatch_evidence(
@@ -429,9 +421,8 @@ def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool
             candidate = copy.deepcopy(effective)
             if "terminalStatuses" in override:
                 candidate["terminalStatuses"] = list(override["terminalStatuses"])
-            for key in ("roles", "savedQueries"):
-                if key in override:
-                    candidate[key].update(copy.deepcopy(override[key]))
+            if "roles" in override:
+                candidate["roles"].update(copy.deepcopy(override["roles"]))
             if "dispatchPolicy" in override:
                 candidate["dispatchPolicy"] = copy.deepcopy(override["dispatchPolicy"])
             if "dispatchEvidence" in override:
@@ -445,14 +436,10 @@ def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool
     if query_override_path.is_file():
         try:
             query_catalog = json.loads(query_override_path.read_text(encoding="utf-8"))
-            if not _validate_query_catalog(query_catalog, allow_removal=True):
+            if not _validate_query_catalog(query_catalog):
                 raise ValueError("query catalog is invalid")
             candidate = copy.deepcopy(effective)
-            for query_id, query in query_catalog["queries"].items():
-                if query is None:
-                    candidate["savedQueries"].pop(query_id, None)
-                else:
-                    candidate["savedQueries"][query_id] = copy.deepcopy(query)
+            candidate["savedQueries"] = copy.deepcopy(query_catalog["queries"])
             _validate_registry(candidate)
             effective = candidate
             override_active = True

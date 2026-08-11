@@ -1,18 +1,20 @@
 {
   "version": 1,
   "queries": {
-    "workspace-ready-items": {
+    "role-active-work-and-attention": {
       "version": 1,
       "kind": "predicate",
-      "params": [],
-      "label": "Ready items in this workspace",
+      "params": ["roleId"],
+      "label": "Active owned work and attention requests for one role",
       "definition": {
-        "where": {
-          "all": [
-            { "field": "archived", "op": "eq", "value": false },
-            { "field": "status", "op": "eq", "value": "ready" }
-          ]
-        },
+        "where": { "all": [
+          { "field": "archived", "op": "eq", "value": false },
+          { "field": "status", "op": "notIn", "value": "$terminalStatuses" },
+          { "any": [
+            { "field": "owner", "op": "eq", "value": "{roleId}" },
+            { "field": "tags", "op": "containsAny", "value": "{roleId.attentionTags}" }
+          ] }
+        ] },
         "sort": [
           { "field": "priority", "direction": "desc" },
           { "field": "updated", "direction": "desc" }
@@ -21,57 +23,77 @@
         "includeTotalCount": true
       }
     },
-    "workspace-walk-readiness": {
+    "dispatch-eligible-work-v1": {
       "version": 1,
-      "kind": "composed",
+      "kind": "traversal",
       "params": [],
-      "label": "Evidence-backed readiness for explicitly staged walk roots",
+      "optionalParams": ["roleId", "launchKeys", "includeUnscoped"],
+      "label": "Fail-closed dispatch candidates across eligible launches",
       "definition": {
-        "mode": "composed-v1",
-        "select": {
-          "where": {
-            "all": [
-              { "field": "archived", "op": "eq", "value": false },
-              { "field": "walkStage", "op": "exists", "value": true },
-              { "field": "buildState", "op": "eq", "value": "build-complete" }
-            ]
-          },
-          "sort": [
-            { "field": "priority", "direction": "desc" },
-            { "field": "updated", "direction": "desc" }
-          ],
-          "limit": 8,
-          "includeTotalCount": true
-        },
-        "traverse": {
-          "expand": {
-            "relationshipTypes": ["depends-on", "implements", "evidences"],
-            "direction": "both",
-            "maxDepth": 1,
-            "edgeWhere": { "status": ["active", "blocked", "cleared"] },
-            "externalEndpointBehavior": "boundary"
-          },
-          "limits": { "maxNodes": 64, "maxEdges": 128 }
-        },
-        "projection": "walk-readiness-v1",
-        "failOn": { "truncation": true, "validation": false }
+        "mode": "dispatch-eligible-work-v1",
+        "failOn": {
+          "truncation": true,
+          "validation": true,
+          "warning": true,
+          "unresolvedEvidence": true
+        }
       }
     },
-    "workspace-launch-scope": {
+    "launch-scope": {
       "version": 1,
       "kind": "traversal",
       "params": ["launchKey"],
-      "label": "Bounded active scope for one launch",
+      "label": "Everything in one launch, fail-closed",
       "definition": {
         "roots": ["{launchKey}"],
-        "membership": {
-          "relationshipTypes": ["part-of-launch"],
-          "direction": "incoming",
-          "status": ["active"],
-          "maxDepth": 1
-        },
-        "limits": { "maxNodes": 200, "maxEdges": 400 },
+        "membership": { "relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1 },
+        "expand": { "relationshipTypes": ["governs", "contributes-to", "reviews", "evidences", "depends-on"], "direction": "both", "maxDepth": 2, "edgeWhere": { "status": ["active"] }, "externalEndpointBehavior": "boundary" },
+        "limits": { "maxNodes": 500, "maxEdges": 1000 },
         "failOn": { "truncation": true, "validation": true }
+      }
+    },
+    "launch-hard-blockers": {
+      "version": 1,
+      "kind": "traversal",
+      "params": ["launchKey"],
+      "label": "Active hard-serial blockers of one launch",
+      "definition": {
+        "roots": ["{launchKey}"],
+        "membership": { "relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1 },
+        "expand": { "relationshipTypes": ["depends-on"], "direction": "both", "maxDepth": 2, "edgeWhere": { "status": ["active"], "hardness": ["hard-serial"] }, "externalEndpointBehavior": "boundary" },
+        "limits": { "maxNodes": 500, "maxEdges": 1000 },
+        "failOn": { "truncation": true, "validation": false }
+      }
+    },
+    "launch-open-reviews": {
+      "version": 1,
+      "kind": "traversal",
+      "params": ["launchKey"],
+      "label": "Open reviews inside one launch",
+      "definition": {
+        "roots": ["{launchKey}"],
+        "membership": { "relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1 },
+        "expand": { "relationshipTypes": ["reviews"], "direction": "both", "maxDepth": 2, "edgeWhere": { "status": ["active"] }, "externalEndpointBehavior": "boundary" },
+        "nodeWhere": { "all": [ { "field": "status", "op": "notIn", "value": "$terminalStatuses" } ] },
+        "limits": { "maxNodes": 500, "maxEdges": 1000 },
+        "failOn": { "truncation": true, "validation": false }
+      }
+    },
+    "launch-unscheduled-executable-work": {
+      "version": 1,
+      "kind": "traversal",
+      "params": ["launchKey"],
+      "label": "Launch members that are executable but unscheduled",
+      "definition": {
+        "roots": ["{launchKey}"],
+        "membership": { "relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1 },
+        "nodeWhere": { "all": [
+          { "field": "status", "op": "notIn", "value": "$terminalStatuses" },
+          { "not": { "field": "dueDate", "op": "exists", "value": true } },
+          { "not": { "field": "forecastDate", "op": "exists", "value": true } }
+        ] },
+        "limits": { "maxNodes": 500, "maxEdges": 1000 },
+        "failOn": { "truncation": false, "validation": false }
       }
     }
   }

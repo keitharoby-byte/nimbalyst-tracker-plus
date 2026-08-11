@@ -2,9 +2,9 @@
 
 ## Validated release
 
-- Validation date: 2026-08-10
-- Nimbalyst: 0.71.3 packaged build
-- Extension: Tracker+ 0.8.2
+- Validation date: 2026-08-11
+- Nimbalyst: 0.72.8 packaged build
+- Extension: Tracker+ 0.9.0
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows
@@ -27,9 +27,13 @@ values contribute to the fingerprint.
 The effective registry combines:
 
 - locked structural values from `reader/registry.json`;
-- bundled query templates from `reader/saved-queries.json`;
 - optional workspace policy from `.nimbalyst/tracker-plus.registry.json`;
-- optional workspace queries from `.nimbalyst/tracker-plus.queries.json`.
+- the complete workspace query inventory from
+  `.nimbalyst/tracker-plus.queries.json`, or an empty inventory when that file
+  is absent or invalid.
+
+`reader/saved-queries.json` remains an integrity-checked package asset but
+contains no active templates.
 
 Registry version, effective hash, query version, and override state appear in
 result receipts. Workspace query changes do not require rebuilding the

@@ -2,9 +2,10 @@
 
 ## Status
 
-Accepted. This document describes only the extension's public, workspace-
-neutral architecture. Installation-specific workflow, role, launch, route,
-and dispatch policy belongs in external JSON configuration.
+Accepted; amended for Tracker+ 0.9. This document describes only the
+extension's public, workspace-neutral architecture. Installation-specific
+workflow, role, launch, route, dispatch policy, and saved queries belong in
+external JSON configuration.
 
 ## Context
 
@@ -19,8 +20,8 @@ extension unsafe to reuse. Therefore the implementation separates:
 - a locked structural registry for schema vocabulary and safety caps;
 - an overridable policy registry for roles, terminal states, and dispatch
   eligibility values;
-- a dedicated saved-query catalog that an installation can add to, replace,
-  or disable without rebuilding the extension.
+- a dedicated saved-query catalog that completely defines each workspace's
+  runtime query inventory without rebuilding the extension.
 
 ## Decisions
 
@@ -43,8 +44,9 @@ metadata. Unresolved selected roots or endpoints are terminal.
 
 ### Queries are externally managed
 
-Bundled templates live in `reader/saved-queries.json`, separate from code and
-the structural registry. An installation manages its effective catalog with:
+Tracker+ ships no active saved queries. The integrity-checked
+`reader/saved-queries.json` package asset contains an empty catalog. A
+workspace manages its complete effective catalog with:
 
 `.nimbalyst/tracker-plus.queries.json`
 
@@ -62,28 +64,29 @@ The file has this form:
       "definition": {
         "where": { "field": "status", "op": "eq", "value": "ready" }
       }
-    },
-    "launch-open-reviews": null
+    }
   }
 }
 ```
 
-An object adds or replaces a query by ID. `null` disables a bundled query. The
-reader validates the whole catalog before activation; an invalid file is
-ignored without partially changing the effective registry. The effective
-catalog contributes to `registryHash` and every result echoes the selected
-query ID, version, parameters, expanded definition, and query fingerprint.
+Every entry must be a complete query object; `null` is invalid. IDs absent from
+the file do not exist at runtime. The reader validates the whole catalog before
+activation; an absent or invalid file yields an empty saved-query inventory
+without partially changing the effective registry. The effective catalog
+contributes to `registryHash` and every result echoes the selected query ID,
+version, parameters, expanded definition, and query fingerprint.
 
 ### Policy is installation-specific
 
 `.nimbalyst/tracker-plus.registry.json` may override terminal statuses, role
-aliases/attention tags, saved queries (legacy compatibility), and the complete
-dispatch policy object. Relationship vocabulary, scope-role vocabulary,
-executable types, caps, and registry version remain locked structural values.
+aliases/attention tags, and the complete dispatch policy object. Saved queries
+are rejected there to preserve one authoritative catalog. Relationship
+vocabulary, scope-role vocabulary, executable types, caps, and registry
+version remain locked structural values.
 
-No bundled query or policy contains organization names, private issue keys,
-product names, owner identities, launch identities, repository paths, or
-installation-specific tags.
+No bundled policy contains organization names, private issue keys, product
+names, owner identities, launch identities, repository paths, or
+installation-specific tags. The package contains no active saved query.
 
 ### Results are bounded and auditable
 

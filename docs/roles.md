@@ -59,6 +59,11 @@ A role inbox query then looks like:
 }
 ```
 
+The `role-active-work-and-attention` query is supplied by the copy-ready
+[`examples/tracker-plus.queries.json`](../examples/tracker-plus.queries.json)
+catalog. Copy that catalog into `.nimbalyst/tracker-plus.queries.json`, or
+define an equivalent workspace query, before using this invocation.
+
 This selects current, non-archived work when either the owner matches an alias
 or the item has an attention tag. It does not change ownership. The same
 `roleId` can optionally narrow `dispatch-eligible-work-v1`.
