@@ -1723,11 +1723,16 @@ class NativeTrackerReader:
         receipts: list[dict[str, Any]] = []
         pre_admission_exclusions: list[dict[str, Any]] = []
         incomplete: list[dict[str, Any]] = []
+        role_definition = (
+            self._registry.get("roles", {}).get(str(role_id), {})
+        )
         role_aliases = {
             alias.casefold()
-            for alias in self._registry.get("roles", {})
-            .get(str(role_id), {})
-            .get("ownerAliases", [])
+            for alias in role_definition.get("ownerAliases", [])
+        }
+        role_attention_tags = {
+            tag.casefold()
+            for tag in role_definition.get("attentionTags", [])
         }
         hard_dependencies_by_source: dict[str, list[dict[str, Any]]] = {}
         for edge in live_edges:
@@ -1769,7 +1774,16 @@ class NativeTrackerReader:
                 value.casefold() for value in policy["readyStatuses"]
             }:
                 admission_reasons.append("workflow-not-dispatch-ready")
-            if role_id and str(item.get("ownerLabel") or "").casefold() not in role_aliases:
+            item_tags = {
+                str(tag).strip().casefold()
+                for tag in item.get("tags", [])
+                if isinstance(tag, str) and tag.strip()
+            }
+            role_matches = (
+                str(item.get("ownerLabel") or "").casefold() in role_aliases
+                or bool(item_tags.intersection(role_attention_tags))
+            )
+            if role_id and not role_matches:
                 admission_reasons.append("role-mismatch")
             if not scoped_to_selected and not unscoped_admitted:
                 admission_reasons.append("scope-not-admitted")
@@ -1949,6 +1963,51 @@ class NativeTrackerReader:
         selected_edge_list = [
             selected_relationships[key] for key in sorted(selected_relationships)
         ]
+
+        # Candidate edges are intentionally admission-scoped, but launch
+        # lifecycle validation must inspect the selected roots' actual active
+        # membership graph. Keep that graph separate so non-dispatch members
+        # can prove a launch is structurally valid without leaking into the
+        # candidate response.
+        incoming_memberships: dict[str, list[dict[str, Any]]] = {}
+        for edge in live_edges:
+            if (
+                edge.get("relationshipType") == "part-of-launch"
+                and edge.get("state") == "active"
+            ):
+                incoming_memberships.setdefault(str(edge["targetId"]), []).append(edge)
+        for values in incoming_memberships.values():
+            values.sort(key=lambda edge: str(edge["id"]))
+        launch_validation_relationships: dict[str, dict[str, Any]] = {}
+        validation_frontier = sorted(selected_root_ids)
+        inspected_validation_nodes: set[str] = set()
+        while validation_frontier:
+            target_id = validation_frontier.pop(0)
+            if target_id in inspected_validation_nodes:
+                continue
+            inspected_validation_nodes.add(target_id)
+            for edge in incoming_memberships.get(target_id, []):
+                for endpoint_id in (str(edge["sourceId"]), str(edge["targetId"])):
+                    endpoint = items_by_id.get(endpoint_id)
+                    if endpoint is None or endpoint.get("archived"):
+                        raise ReaderError(
+                            "UNRESOLVED_EDGE",
+                            "A selected launch membership has an unavailable endpoint.",
+                            {
+                                "relationshipId": edge["id"],
+                                "endpointId": endpoint_id,
+                                "resolvedRoots": sorted(selected_root_ids),
+                            },
+                        )
+                launch_validation_relationships[str(edge["id"])] = edge
+                source_id = str(edge["sourceId"])
+                if source_id not in inspected_validation_nodes:
+                    validation_frontier.append(source_id)
+            validation_frontier.sort()
+        launch_validation_edge_list = [
+            launch_validation_relationships[key]
+            for key in sorted(launch_validation_relationships)
+        ]
         selected_item_ids = {
             receipt["itemId"] for receipt in receipts
         } | {
@@ -1956,22 +2015,15 @@ class NativeTrackerReader:
             for edge in selected_edge_list
             for endpoint in (edge["sourceId"], edge["targetId"])
         }
+        validation_relationships = {
+            **selected_relationships,
+            **launch_validation_relationships,
+        }
         scoped_normalization_findings = [
             finding for finding in normalization_findings
-            if set(finding.get("relationshipIds", [])).intersection(selected_relationships)
+            if set(finding.get("relationshipIds", [])).intersection(validation_relationships)
         ]
-        validation_root_ids = (
-            selected_root_ids
-            if launch_keys
-            else {
-                str(edge["targetId"])
-                for edge in selected_edge_list
-                if edge.get("relationshipType") in {
-                    "part-of-launch",
-                    "contributes-to",
-                }
-            }
-        )
+        validation_root_ids = selected_root_ids
         validation_node_ids = validation_item_ids | validation_root_ids | {
             endpoint
             for edge in selected_edge_list
@@ -1982,13 +2034,30 @@ class NativeTrackerReader:
             for item_id in sorted(validation_node_ids)
             if item_id in items_by_id
         ]
+        launch_validation_node_ids = validation_root_ids | {
+            endpoint
+            for edge in launch_validation_edge_list
+            for endpoint in (edge["sourceId"], edge["targetId"])
+        }
+        launch_validation_nodes = [
+            items_by_id[item_id]
+            for item_id in sorted(launch_validation_node_ids)
+            if item_id in items_by_id
+        ]
+        validation_edge_list = [
+            validation_relationships[key]
+            for key in sorted(validation_relationships)
+        ]
         findings = [
             *self._registry_findings(),
             *self._schema_discovery_findings(schema_discovery),
             *scoped_normalization_findings,
-            *self._semantic_duplicate_findings(selected_edge_list),
+            *self._semantic_duplicate_findings(validation_edge_list),
             *self._validate_timeline(selected_nodes, selected_edge_list),
-            *self._launch_findings(selected_nodes, selected_edge_list),
+            *self._launch_findings(
+                launch_validation_nodes,
+                launch_validation_edge_list,
+            ),
             *self._dispatch_topology_findings(receipts, selected_edge_list),
         ]
         validation = self._validation_block(findings)

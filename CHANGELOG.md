@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.8.2 - 2026-08-10
+
+- Honor configured role `attentionTags` alongside owner aliases during
+  dispatch pre-admission so routed rows receive detailed inclusion or
+  exclusion receipts. Validate selected launch roots against their actual
+  active membership graph independently of candidate admission, while keeping
+  unresolved endpoints, lifecycle omissions, evidence gaps, and truncation
+  terminal and withholding all candidates and totals. (#27)
+
 ## 0.8.1 - 2026-08-10
 
 - Make complete predicate-query retrieval explicit: responses now distinguish

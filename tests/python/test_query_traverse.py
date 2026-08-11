@@ -1505,6 +1505,158 @@ class QueryTraverseTests(unittest.TestCase):
             "dispatch-incomplete",
         )
 
+    def test_dispatch_role_attention_tag_reaches_detailed_receipt(self) -> None:
+        self._write_registry_override({
+            "roles": {
+                "dispatch-controller": {
+                    "ownerAliases": ["dispatch-controller"],
+                    "attentionTags": ["needs-dispatch-attention"],
+                }
+            }
+        })
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "dispatch-attention", "NIM-DISPATCH-ATTN", "task", {
+                "title": "Attention-routed packet",
+                "status": "ready",
+                "owner": "project-manager",
+                "tags": ["Needs-Dispatch-Attention"],
+            })
+            self._link(
+                connection,
+                "dispatch-attention-membership",
+                "REL-DISPATCH-ATTN",
+                "dispatch-attention",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {
+                    "id": "dispatch-eligible-work-v1",
+                    "params": {
+                        "roleId": "dispatch-controller",
+                        "launchKeys": ["RELEASE-A"],
+                    },
+                },
+            })
+
+        self.assertEqual(raised.exception.code, "DISPATCH_EVIDENCE_INCOMPLETE")
+        receipt = raised.exception.details["receipt"]
+        self.assertEqual(receipt["admission"]["detailedInspectionCount"], 1)
+        self.assertEqual(
+            receipt["incompleteEvidence"][0]["itemId"],
+            "dispatch-attention",
+        )
+        self.assertEqual(receipt["candidates"], [])
+        self.assertNotIn("launchTotals", receipt)
+
+    def test_dispatch_validates_explicit_launch_graph_before_admission(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "launch-container", "NIM-LAUNCH-CONTAINER", "feature", {
+                "title": "Non-delivery launch container",
+                "status": "active",
+                "owner": "project-manager",
+            })
+            self._link(
+                connection,
+                "launch-container-membership",
+                "REL-LAUNCH-CONTAINER",
+                "launch-container",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {
+                    "roleId": "coordinator",
+                    "launchKeys": ["RELEASE-A"],
+                },
+            },
+        })
+
+        self.assertEqual(result["validation"]["state"], "pass")
+        self.assertEqual(result["receipts"], [])
+        self.assertEqual(result["nodes"], [])
+        self.assertEqual(result["edges"], [])
+        self.assertEqual(result["page"]["candidateCount"], 0)
+
+    def test_dispatch_launch_graph_unavailable_endpoint_fails_closed(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._link(
+                connection,
+                "missing-launch-member",
+                "REL-MISSING-LAUNCH-MEMBER",
+                "missing-source",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {
+                    "id": "dispatch-eligible-work-v1",
+                    "params": {"launchKeys": ["RELEASE-A"]},
+                },
+            })
+
+        self.assertEqual(raised.exception.code, "UNRESOLVED_EDGE")
+        self.assertEqual(
+            raised.exception.details["relationshipId"],
+            "missing-launch-member",
+        )
+
+    def test_dispatch_launch_lifecycle_omission_remains_terminal(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "launch-incomplete", "LAUNCH-INCOMPLETE", "launch", {
+                "title": "Incomplete launch",
+                "launchKey": "INCOMPLETE",
+                "status": "active",
+            })
+            self._insert(connection, "launch-incomplete-member", "ITEM-INCOMPLETE", "feature", {
+                "title": "Valid structural member",
+                "status": "active",
+            })
+            self._link(
+                connection,
+                "launch-incomplete-membership",
+                "REL-LAUNCH-INCOMPLETE",
+                "launch-incomplete-member",
+                "launch-incomplete",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {
+                    "id": "dispatch-eligible-work-v1",
+                    "params": {"launchKeys": ["INCOMPLETE"]},
+                },
+            })
+
+        self.assertEqual(raised.exception.code, "VALIDATION_FAILED")
+        receipt = raised.exception.details["receipt"]
+        self.assertIn(
+            "launch-fields-incomplete",
+            {finding["code"] for finding in receipt["validation"]["findings"]},
+        )
+        self.assertEqual(receipt["candidates"], [])
+        self.assertNotIn("launchTotals", receipt)
+
     def test_dispatch_evidence_mapping_supports_fields_tags_prefixes_and_provenance(self) -> None:
         self._write_registry_override(self._mapped_dispatch_override())
         with closing(sqlite3.connect(self.db_path)) as connection:

@@ -332,9 +332,11 @@ Copy-paste dispatch and launch queries:
 
 `dispatch-eligible-work-v1` inspects native `task` and `bug` rows by default.
 Optional `launchKeys` accepts 1–8 unique launch keys, `roleId` uses the role
-alias catalog, and `includeUnscoped` is effective only for tracker types listed
-in `dispatchPolicy.admittedUnscopedTypes`. Omitting `launchKeys` considers all
-current launches admitted by policy; it does not infer scope from tags.
+catalog's owner aliases or configured attention tags, and `includeUnscoped` is
+effective only for tracker types listed in
+`dispatchPolicy.admittedUnscopedTypes`. Omitting `launchKeys` considers all
+current launches admitted by policy; attention tags route a row to a role but
+do not infer launch scope.
 
 Potentially eligible rows resolve `packetRevision`, currentness,
 `qaEvidenceRevision`, `qaStatus`, `holdState`, `databaseRouteState`,
@@ -352,6 +354,11 @@ train ancestry plus the stable native relationship IDs used to prove it.
 Retired, archived, filtered, and out-of-boundary relationships are excluded
 before duplicate validation. Parallel relationships remain distinct when
 their scope or contribution role differs.
+
+Selected launch roots are lifecycle-validated against their actual active
+`part-of-launch` graph before candidate admission. That validation graph is
+not returned as candidate output: non-dispatch members can prove a launch has
+active core membership without becoming candidates or detailed row receipts.
 
 Candidate order is graph-first: cleared hard-serial dependency topology,
 launch and item `criticalPathPriority`, native priority, active `precedes`
