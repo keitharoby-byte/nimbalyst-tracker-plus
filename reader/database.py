@@ -806,6 +806,9 @@ class NativeTrackerReader:
                 "returnedCount": len(page_rows),
                 "nextCursor": encode_cursor(sort, str(page_rows[-1]["id"])) if has_more and page_rows else None,
                 "truncated": False,
+                "resultsComplete": not has_more,
+                "continuationRequired": has_more,
+                "responseTruncated": False,
             },
             "validation": self._validation_block(findings),
             "watermark": self._watermark(
@@ -843,7 +846,7 @@ class NativeTrackerReader:
     def traverse_graph(self, params: Mapping[str, Any]) -> dict[str, Any]:
         """Traverse normalized relationships from one or more bounded roots."""
         started = time.perf_counter()
-        allowed = {"workspacePath", "roots", "membership", "expand", "nodeWhere", "limits", "failOn", "savedQuery"}
+        allowed = {"workspacePath", "roots", "membership", "expand", "nodeWhere", "limits", "failOn", "savedQuery", "paginate", "cursor"}
         unknown = sorted(set(params) - allowed)
         if unknown:
             raise ReaderError("INVALID_PARAMS", f"Unknown parameter(s): {', '.join(unknown)}.")
@@ -857,14 +860,26 @@ class NativeTrackerReader:
             if "roots" in params:
                 raise ReaderError("QUERY_INVALID", "savedQuery and roots cannot be combined.")
             definition, query_echo = expand_saved_query(params["savedQuery"], self._registry, "traversal")
-            expanded = {**definition, "workspacePath": workspace_path}
+            expanded = {
+                **definition,
+                "workspacePath": workspace_path,
+                **{
+                    key: params[key]
+                    for key in ("paginate", "cursor")
+                    if key in params
+                },
+            }
             if definition.get("mode") == "dispatch-eligible-work-v1":
+                if params.get("paginate") or params.get("cursor") is not None:
+                    raise ReaderError("QUERY_INVALID", "Dispatch traversal does not support pagination.")
                 return self._dispatch_eligible_work(
                     workspace_path,
                     query_echo,
                     started,
                 )
             if definition.get("mode") == "composed-v1":
+                if params.get("paginate") or params.get("cursor") is not None:
+                    raise ReaderError("QUERY_INVALID", "Composed traversal does not support pagination.")
                 return self._composed_saved_traversal(
                     workspace_path,
                     definition,
@@ -891,6 +906,17 @@ class NativeTrackerReader:
         fail_on = expanded.get("failOn", {})
         if not isinstance(fail_on, Mapping) or set(fail_on) - {"truncation", "validation"} or not all(isinstance(value, bool) for value in fail_on.values()):
             raise ReaderError("QUERY_INVALID", "failOn is invalid.")
+        paginate = expanded.get("paginate", False)
+        cursor = expanded.get("cursor")
+        if not isinstance(paginate, bool):
+            raise ReaderError("QUERY_INVALID", "paginate must be a boolean.")
+        if cursor is not None and (
+            not paginate or not isinstance(cursor, str) or not cursor
+        ):
+            raise ReaderError(
+                "CURSOR_INVALID",
+                "Traversal cursor requires paginate=true and an opaque non-empty cursor.",
+            )
         try:
             with self._connect() as connection:
                 fingerprint = self._validate_schema(connection)
@@ -1054,6 +1080,93 @@ class NativeTrackerReader:
         self._apply_launch_rollups(result_items, selected_edges)
         validation = self._validation_block(findings)
 
+        if validation["state"] != "pass" and fail_on.get("validation", False):
+            raise ReaderError("VALIDATION_FAILED", "Traversal validation failed.", {"validation": validation})
+        query_receipt = {
+            **query_echo,
+            "roots": roots,
+            "resolvedRoots": resolved_roots,
+            "membership": membership,
+            "expand": expand,
+            "nodeWhere": node_where,
+            "limits": {"maxNodes": max_nodes, "maxEdges": max_edges},
+            "failOn": dict(fail_on),
+            "paginate": paginate,
+        }
+        query_receipt["queryFingerprint"] = self._stable_fingerprint(
+            {
+                "query": query_receipt,
+                "schemaAdapter": SCHEMA_ADAPTER,
+                "schemaFingerprint": fingerprint,
+                "registryVersion": self._registry["version"],
+                "registryHash": self._registry_hash,
+                "sourceItemCount": len(item_rows),
+                "sourceRelationshipCount": len(link_db_rows),
+            }
+        )
+
+        if paginate:
+            ordinary_ids = sorted(kept_ids - boundary_ids)
+            ordered_boundary_ids = sorted(kept_ids & boundary_ids)
+            node_stream = [
+                ("node", items_by_id[item_id]) for item_id in ordinary_ids
+            ] + [
+                ("boundary", items_by_id[item_id])
+                for item_id in ordered_boundary_ids
+            ]
+            edge_stream = sorted(selected_edges, key=lambda edge: edge["id"])
+            result_fingerprint = self._stable_fingerprint({
+                "queryFingerprint": query_receipt["queryFingerprint"],
+                "nodeIds": [item["id"] for _kind, item in node_stream],
+                "edgeIds": [edge["id"] for edge in edge_stream],
+            })
+            node_offset, edge_offset = self._decode_traversal_cursor(
+                cursor,
+                result_fingerprint,
+                len(node_stream),
+                len(edge_stream),
+            )
+            node_page = node_stream[node_offset:node_offset + max_nodes]
+            edge_page = edge_stream[edge_offset:edge_offset + max_edges]
+            result = {
+                "nodes": [item for kind, item in node_page if kind == "node"],
+                "edges": edge_page,
+                "boundaryNodes": [
+                    item for kind, item in node_page if kind == "boundary"
+                ],
+                "page": {
+                    "totalCount": len(node_stream),
+                    "totalEdgeCount": len(edge_stream),
+                    "returnedCount": len(node_page),
+                    "returnedEdgeCount": len(edge_page),
+                    "nextCursor": None,
+                    "truncated": False,
+                    "resultsComplete": False,
+                    "continuationRequired": False,
+                    "responseTruncated": False,
+                },
+                "validation": validation,
+                "watermark": self._watermark(
+                    fingerprint,
+                    len(item_rows),
+                    len(link_db_rows),
+                    started,
+                    schema_discovery,
+                ),
+                "query": {
+                    **query_receipt,
+                    "resultFingerprint": result_fingerprint,
+                },
+            }
+            return self._fit_paginated_traversal_result(
+                result,
+                node_offset,
+                edge_offset,
+                len(node_stream),
+                len(edge_stream),
+                result_fingerprint,
+            )
+
         ordered_levels: dict[int, list[str]] = {}
         for item_id in kept_ids:
             ordered_levels.setdefault(node_depth.get(item_id, 99), []).append(item_id)
@@ -1070,9 +1183,7 @@ class NativeTrackerReader:
             selected_edges = sorted(selected_edges, key=lambda edge: edge["id"])[:max_edges]
             truncated = True
         if truncated and fail_on.get("truncation", False):
-            raise ReaderError("RESULT_TRUNCATED", "Traversal caps prevented a complete graph response.")
-        if validation["state"] != "pass" and fail_on.get("validation", False):
-            raise ReaderError("VALIDATION_FAILED", "Traversal validation failed.", {"validation": validation})
+            raise ReaderError("RESULT_TRUNCATED", "Traversal caps prevented a complete graph response. Retry with paginate=true and follow every page.nextCursor.")
         nodes = [items_by_id[item_id] for item_id in sorted(retained_ids - boundary_ids)]
         boundary_nodes = [items_by_id[item_id] for item_id in sorted(retained_ids & boundary_ids)]
         result = {
@@ -1088,28 +1199,8 @@ class NativeTrackerReader:
                 started,
                 schema_discovery,
             ),
-            "query": {
-                **query_echo,
-                "roots": roots,
-                "resolvedRoots": resolved_roots,
-                "membership": membership,
-                "expand": expand,
-                "nodeWhere": node_where,
-                "limits": {"maxNodes": max_nodes, "maxEdges": max_edges},
-                "failOn": dict(fail_on),
-            },
+            "query": query_receipt,
         }
-        result["query"]["queryFingerprint"] = self._stable_fingerprint(
-            {
-                "query": result["query"],
-                "schemaAdapter": SCHEMA_ADAPTER,
-                "schemaFingerprint": fingerprint,
-                "registryVersion": self._registry["version"],
-                "registryHash": self._registry_hash,
-                "sourceItemCount": len(item_rows),
-                "sourceRelationshipCount": len(link_db_rows),
-            }
-        )
         fitted = self._fit_graph_result(result)
         if fitted["page"]["truncated"] and fail_on.get("truncation", False):
             raise ReaderError("RESULT_TRUNCATED", "Traversal caps prevented a complete graph response.")
@@ -4169,11 +4260,15 @@ class NativeTrackerReader:
             retained = {item["id"] for item in [*result["nodes"], *result["boundaryNodes"]]}
             result["edges"] = [edge for edge in result["edges"] if edge.get("sourceId") in retained and edge.get("targetId") in retained]
             result["page"]["truncated"] = True
+            result["page"]["responseTruncated"] = True
             if sort:
                 last_id = result["nodes"][-1]["id"] if result["nodes"] else result["edges"][-1]["id"] if result["edges"] else None
                 if last_id:
                     result["page"]["nextCursor"] = encode_cursor(sort, last_id)
         result["page"]["returnedCount"] = len(result["nodes"]) + len(result["boundaryNodes"])
+        next_cursor = result["page"].get("nextCursor")
+        result["page"]["resultsComplete"] = next_cursor is None and not result["page"].get("truncated", False)
+        result["page"]["continuationRequired"] = next_cursor is not None
         if findings_trimmed:
             result["validation"]["findings"].append(self._finding(
                 "validation-findings-truncated", "warning",
@@ -4182,6 +4277,150 @@ class NativeTrackerReader:
             result["validation"]["state"] = "fail" if any(item.get("severity") == "error" for item in result["validation"]["findings"]) else "warn"
         if self._json_size(result) > MAX_RESULT_BYTES:
             raise ReaderError("RESPONSE_TOO_LARGE", "The graph response exceeded the safe response limit.")
+        for item in result["nodes"]:
+            for key in [entry for entry in item if entry.startswith("_")]:
+                item.pop(key, None)
+        return result
+
+    @staticmethod
+    def _encode_traversal_cursor(
+        result_fingerprint: str,
+        node_offset: int,
+        edge_offset: int,
+    ) -> str:
+        payload = {
+            "v": 1,
+            "k": "g1",
+            "r": result_fingerprint,
+            "n": node_offset,
+            "e": edge_offset,
+        }
+        return base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_traversal_cursor(
+        raw: Any,
+        result_fingerprint: str,
+        node_total: int,
+        edge_total: int,
+    ) -> tuple[int, int]:
+        if raw is None:
+            return 0, 0
+        if not isinstance(raw, str):
+            raise ReaderError("CURSOR_INVALID", "Traversal cursor must be opaque text.")
+        try:
+            payload = json.loads(
+                base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+            )
+        except (ValueError, UnicodeError, json.JSONDecodeError, binascii.Error):
+            raise ReaderError("CURSOR_INVALID", "The traversal cursor is invalid.") from None
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("v") != 1
+            or payload.get("k") != "g1"
+            or payload.get("r") != result_fingerprint
+            or isinstance(payload.get("n"), bool)
+            or not isinstance(payload.get("n"), int)
+            or isinstance(payload.get("e"), bool)
+            or not isinstance(payload.get("e"), int)
+            or not 0 <= payload["n"] <= node_total
+            or not 0 <= payload["e"] <= edge_total
+            or (payload["n"] == node_total and payload["e"] == edge_total)
+        ):
+            raise ReaderError(
+                "CURSOR_INVALID",
+                "The traversal cursor does not match the current complete graph.",
+            )
+        return payload["n"], payload["e"]
+
+    def _fit_paginated_traversal_result(
+        self,
+        result: dict[str, Any],
+        node_offset: int,
+        edge_offset: int,
+        node_total: int,
+        edge_total: int,
+        result_fingerprint: str,
+    ) -> dict[str, Any]:
+        findings_trimmed = False
+        response_truncated = False
+
+        def update_page() -> None:
+            next_node_offset = node_offset + len(result["nodes"]) + len(result["boundaryNodes"])
+            next_edge_offset = edge_offset + len(result["edges"])
+            continuation_required = (
+                next_node_offset < node_total or next_edge_offset < edge_total
+            )
+            result["page"].update({
+                "returnedCount": len(result["nodes"]) + len(result["boundaryNodes"]),
+                "returnedEdgeCount": len(result["edges"]),
+                "nextCursor": (
+                    self._encode_traversal_cursor(
+                        result_fingerprint,
+                        next_node_offset,
+                        next_edge_offset,
+                    )
+                    if continuation_required
+                    else None
+                ),
+                "truncated": continuation_required,
+                "resultsComplete": not continuation_required,
+                "continuationRequired": continuation_required,
+                "responseTruncated": response_truncated,
+            })
+
+        update_page()
+        while self._json_size(result) > MAX_RESULT_BYTES and (
+            result["edges"]
+            or result["boundaryNodes"]
+            or result["nodes"]
+            or result["validation"]["findings"]
+        ):
+            response_truncated = True
+            if result["edges"]:
+                result["edges"].pop()
+            elif result["boundaryNodes"]:
+                result["boundaryNodes"].pop()
+            elif result["nodes"]:
+                result["nodes"].pop()
+            else:
+                result["validation"]["findings"].pop()
+                findings_trimmed = True
+            update_page()
+
+        if findings_trimmed:
+            result["validation"]["findings"].append(self._finding(
+                "validation-findings-truncated",
+                "warning",
+                "Validation findings were truncated to keep the bounded response safe.",
+            ))
+            result["validation"]["state"] = (
+                "fail"
+                if any(
+                    item.get("severity") == "error"
+                    for item in result["validation"]["findings"]
+                )
+                else "warn"
+            )
+        result["validation"]["findingsComplete"] = not findings_trimmed
+        update_page()
+        if self._json_size(result) > MAX_RESULT_BYTES:
+            raise ReaderError(
+                "RESPONSE_TOO_LARGE",
+                "A single paged traversal entity exceeded the safe response limit.",
+            )
+        if (
+            result["page"]["continuationRequired"]
+            and not result["nodes"]
+            and not result["boundaryNodes"]
+            and not result["edges"]
+        ):
+            raise ReaderError(
+                "RESPONSE_TOO_LARGE",
+                "The paged traversal could not make progress within the safe response limit.",
+            )
         for item in result["nodes"]:
             for key in [entry for entry in item if entry.startswith("_")]:
                 item.pop(key, None)

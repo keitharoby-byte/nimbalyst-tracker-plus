@@ -125,7 +125,12 @@ Direct predicates use `all`, `any`, `not`, or a field clause:
 ```
 
 `limit` defaults to 50 and is capped at 200. `cursor` accepts only the opaque
-`page.nextCursor` from the same query and sort. `includeArchived` and
+`page.nextCursor` from the same query and sort. When
+`page.continuationRequired` is true, repeat the identical request with that
+cursor and aggregate the pages until it is false. Do this automatically unless
+the user explicitly requested only one page. `page.resultsComplete` is true
+only when the result set is complete; a response-size-truncated page remains
+continuable without weakening the response cap. `includeArchived` and
 `includeRelationshipRecords` default to false. Results place items in `nodes`;
 requested `timeline-link` records appear only in `edges`. Always inspect the
 validation and watermark blocks.
@@ -165,6 +170,16 @@ The traversal watermark carries the same `schemaDiscovery` receipt as queries.
 The query receipt also includes resolved roots, boundary rules, limits,
 declared `failOn` behavior, and a deterministic `queryFingerprint`. Timeline
 projections persist schema discovery under `snapshot.source` for UI review.
+
+If a standard traversal returns `RESULT_TRUNCATED`, repeat the identical call
+with `paginate: true`. In that mode `limits.maxNodes` and `limits.maxEdges` are
+safe page sizes. Aggregate `nodes`, `boundaryNodes`, and `edges`, following each
+opaque `page.nextCursor` until `page.continuationRequired` is false and
+`page.resultsComplete` is true. Do not interpret an individual fragment as a
+complete graph. Cursors are bound to the selected graph and fail with
+`CURSOR_INVALID` if its node or edge identity changes between pages. Dispatch
+and composed traversal modes remain atomic and fail closed; they do not support
+pagination.
 
 ## Saved query and role search catalog
 
@@ -249,8 +264,9 @@ opaque `page.nextCursor`; never edit or reuse a cursor with another query.
 | `launch-unscheduled-executable-work` | `native_tracker_traverse` | `launchKey` | Nonterminal launch members with neither `dueDate` nor `forecastDate`. It does not expand context edges and reports rather than fails on truncation or validation. |
 
 All bundled launch traversals use active incoming `part-of-launch` membership at
-depth one. Traversal limits are at most 500 nodes and 1,000 edges. Boundary
-nodes are context, not launch members, and are excluded from launch rollups.
+depth one. Traversal limits are at most 500 nodes and 1,000 edges per response;
+in paged standard traversal mode those become page sizes. Boundary nodes are
+context, not launch members, and are excluded from launch rollups.
 
 Copy-paste dispatch and launch queries:
 
@@ -820,8 +836,12 @@ Common recoveries:
   retry the same relative output path.
 - `QUERY_INVALID`, `FIELD_NOT_QUERYABLE`, or `OPERATOR_INVALID`: correct the
   path-addressed predicate error; never retry by sending SQL.
-- `RESULT_TRUNCATED` or `VALIDATION_FAILED`: narrow the graph or resolve the
-  returned findings; fail-closed launch views must not be treated as complete.
+- `RESULT_TRUNCATED`: for a standard traversal, retry identically with
+  `paginate: true` and aggregate through the final cursor; for dispatch or
+  composed modes, narrow the graph because they remain atomic. Never treat a
+  partial page as complete.
+- `VALIDATION_FAILED`: resolve the returned findings; fail-closed launch views
+  must not be treated as complete.
 - `SELECTOR_NO_MATCH`: correct the requested tag or add it to the intended
   active seed; the existing timeline file was not replaced.
 - `SOURCE_LIMIT_EXCEEDED` or `RESULT_LIMIT_EXCEEDED`: narrow the selected tag

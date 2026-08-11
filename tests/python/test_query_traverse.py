@@ -440,6 +440,42 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(len(ids), first["page"]["totalCount"])
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_query_response_truncation_can_be_fully_retrieved_by_cursor(self) -> None:
+        params = {
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "exists", "value": True},
+            "sort": [{"field": "id", "direction": "asc"}],
+            "limit": 200,
+        }
+        ids: list[str] = []
+        cursor: str | None = None
+        total_count: int | None = None
+        saw_response_truncation = False
+
+        with patch("reader.database.MAX_RESULT_BYTES", 25_000):
+            for _page_number in range(20):
+                result = self.reader.query_items({
+                    **params,
+                    **({"cursor": cursor} if cursor else {}),
+                })
+                total_count = total_count if total_count is not None else result["page"]["totalCount"]
+                ids.extend(node["id"] for node in result["nodes"])
+                saw_response_truncation = saw_response_truncation or result["page"]["responseTruncated"]
+                cursor = result["page"]["nextCursor"]
+                self.assertEqual(result["page"]["continuationRequired"], cursor is not None)
+                self.assertEqual(
+                    result["page"]["resultsComplete"],
+                    cursor is None and not result["page"]["truncated"],
+                )
+                if not result["page"]["continuationRequired"]:
+                    break
+            else:
+                self.fail("cursor continuation did not terminate")
+
+        self.assertTrue(saw_response_truncation)
+        self.assertEqual(len(ids), total_count)
+        self.assertEqual(len(ids), len(set(ids)))
+
     def test_query_complexity_and_foreign_cursor_fail(self) -> None:
         with self.assertRaises(ReaderError) as raised:
             self.reader.query_items({"workspacePath": self.workspace, "where": {"field": "unknown", "op": "eq", "value": "x"}})
@@ -1004,6 +1040,81 @@ class QueryTraverseTests(unittest.TestCase):
         with self.assertRaises(ReaderError) as raised:
             self.reader.traverse_graph({**base, "failOn": {"truncation": True, "validation": False}})
         self.assertEqual(raised.exception.code, "RESULT_TRUNCATED")
+
+        complete = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["RELEASE-A"],
+            "membership": {
+                "relationshipTypes": ["part-of-launch"],
+                "direction": "incoming",
+                "status": ["active"],
+                "maxDepth": 1,
+            },
+        })
+        node_ids: list[str] = []
+        edge_ids: list[str] = []
+        cursor: str | None = None
+        for _page_number in range(10):
+            page = self.reader.traverse_graph({
+                **base,
+                "limits": {"maxNodes": 1, "maxEdges": 1},
+                "failOn": {"truncation": True, "validation": False},
+                "paginate": True,
+                **({"cursor": cursor} if cursor else {}),
+            })
+            node_ids.extend(
+                node["id"] for node in [*page["nodes"], *page["boundaryNodes"]]
+            )
+            edge_ids.extend(edge["id"] for edge in page["edges"])
+            cursor = page["page"]["nextCursor"]
+            self.assertEqual(page["page"]["continuationRequired"], cursor is not None)
+            if not page["page"]["continuationRequired"]:
+                self.assertTrue(page["page"]["resultsComplete"])
+                break
+        else:
+            self.fail("traversal cursor continuation did not terminate")
+
+        self.assertEqual(
+            node_ids,
+            [node["id"] for node in [*complete["nodes"], *complete["boundaryNodes"]]],
+        )
+        self.assertEqual(edge_ids, [edge["id"] for edge in complete["edges"]])
+
+    def test_traversal_cursor_rejects_a_changed_complete_graph(self) -> None:
+        request = {
+            "workspacePath": self.workspace,
+            "roots": ["RELEASE-A"],
+            "membership": {
+                "relationshipTypes": ["part-of-launch"],
+                "direction": "incoming",
+                "status": ["active"],
+                "maxDepth": 1,
+            },
+            "limits": {"maxNodes": 1, "maxEdges": 1},
+            "paginate": True,
+        }
+        first = self.reader.traverse_graph(request)
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "member-new", "ITEM-NEW", "task", {
+                "title": "New member", "status": "open",
+            })
+            self._link(
+                connection,
+                "link-member-new",
+                "REL-NEW",
+                "member-new",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                **request,
+                "cursor": first["page"]["nextCursor"],
+            })
+        self.assertEqual(raised.exception.code, "CURSOR_INVALID")
 
     def test_selected_traversal_filters_retired_and_preserves_role_identity(self) -> None:
         with closing(sqlite3.connect(self.db_path)) as connection:
