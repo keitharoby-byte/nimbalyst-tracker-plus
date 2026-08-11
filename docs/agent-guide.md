@@ -52,7 +52,8 @@ part of normal recovery.
    watermark.
 7. Generate a milestone report when a durable status artifact is required.
 
-For launch work, begin with the fail-closed `launch-scope` saved traversal,
+For launch work, after installing or defining a workspace query catalog, begin
+with the fail-closed `launch-scope` saved traversal,
 then use a role query for the operator's nonterminal work and attention tags.
 
 ## `native_tracker_get_with_comments`
@@ -157,8 +158,8 @@ context. Saved launch queries are the preferred contract:
 }
 ```
 
-Bundled traversal query IDs are `dispatch-eligible-work-v1`,
-`walk-ready-milestones`, `launch-scope`, `launch-hard-blockers`,
+Tracker+ ships no active saved queries. The copy-ready workspace catalog
+defines `dispatch-eligible-work-v1`, `launch-scope`, `launch-hard-blockers`,
 `launch-open-reviews`, and
 `launch-unscheduled-executable-work`. A direct call
 accepts `roots` (1–8 issue keys, launch keys, or IDs), optional `membership`
@@ -183,10 +184,10 @@ pagination.
 
 ## Saved query and role search catalog
 
-Saved queries are versioned, parameterized templates from the effective
-Tracker+ query catalog. Bundled defaults live in `reader/saved-queries.json`;
-an installation can add, replace, or disable templates with
-`.nimbalyst/tracker-plus.queries.json` without rebuilding the extension. The
+Saved queries are versioned, parameterized templates from the workspace's
+effective Tracker+ query catalog. The integrity-checked bundled catalog is
+empty; `.nimbalyst/tracker-plus.queries.json` is the complete authoritative
+inventory for that workspace. The
 response echoes the template ID, version, validated parameters, and fully
 expanded definition under `query`, so callers can audit exactly what ran.
 Always inspect `page`, `validation`, and `watermark` before acting on the
@@ -221,7 +222,7 @@ The bundled role catalog currently contains:
 
 Role IDs and aliases are matched case-insensitively against string owners and
 the native identity fields `username`, `name`, `displayName`, and `gitName`.
-Attention tags are also matched case-insensitively. The bundled role query uses
+Attention tags are also matched case-insensitively. The copy-ready role query uses
 this exact logic:
 
 ```text
@@ -251,19 +252,18 @@ This is the normal heartbeat query. Read native comments only for returned
 items. To continue, repeat the identical saved query and parameters with the
 opaque `page.nextCursor`; never edit or reuse a cursor with another query.
 
-### Bundled saved queries
+### Copy-ready workspace queries
 
 | Template ID | Tool | Parameter | Selection and safety behavior |
 |---|---|---|---|
 | `role-active-work-and-attention` | `native_tracker_query` | `roleId` | Nonterminal, non-archived work whose owner matches a role alias **or** whose tags contain a role attention tag. Excludes relationship records by default; returns deterministic cursor pages and a total count. |
 | `dispatch-eligible-work-v1` | `native_tracker_traverse` | Optional `roleId`, `launchKeys[]`, `includeUnscoped` | Current, QA-passed, conflict-free task/bug packets across eligible launches. Returns auditable inclusion/exclusion receipts and fails closed on any warning, validation error, unresolved evidence, incomplete required evidence, cycle, or truncation. |
-| `walk-ready-milestones` | `native_tracker_traverse` | None | Selects roots with explicit native walk/build fields, expands hard-serial predecessor plus implementation/evidence edges, and returns evidence-backed walk readiness in one bounded result. Selection overflow is terminal; missing evidence remains `unknown` with visible validation findings. |
 | `launch-scope` | `native_tracker_traverse` | `launchKey` | Active depth-one launch members plus two bounded context levels across `governs`, `contributes-to`, `reviews`, `evidences`, and `depends-on`. External context is returned as boundary nodes. Fails closed on truncation or error-severity validation. |
 | `launch-hard-blockers` | `native_tracker_traverse` | `launchKey` | Active `hard-serial` `depends-on` edges around launch members, with external endpoints as boundaries. Fails closed on truncation; validation findings remain visible without failing warning-only runs. |
 | `launch-open-reviews` | `native_tracker_traverse` | `launchKey` | Active `reviews` edges for nonterminal launch members, with external endpoints as boundaries. Fails closed on truncation. |
 | `launch-unscheduled-executable-work` | `native_tracker_traverse` | `launchKey` | Nonterminal launch members with neither `dueDate` nor `forecastDate`. It does not expand context edges and reports rather than fails on truncation or validation. |
 
-All bundled launch traversals use active incoming `part-of-launch` membership at
+All copy-ready launch traversals use active incoming `part-of-launch` membership at
 depth one. Traversal limits are at most 500 nodes and 1,000 edges per response;
 in paged standard traversal mode those become page sizes. Boundary nodes are
 context, not launch members, and are excluded from launch rollups.
@@ -279,15 +279,6 @@ Copy-paste dispatch and launch queries:
       "launchKeys": ["RELEASE-A", "RELEASE-B"],
       "includeUnscoped": false
     }
-  }
-}
-```
-
-```json
-{
-  "savedQuery": {
-    "id": "walk-ready-milestones",
-    "params": {}
   }
 }
 ```
@@ -478,11 +469,12 @@ quality, security, and documentation examples.
 
 ### Managing saved queries without code changes
 
-Create `.nimbalyst/tracker-plus.queries.json` in the workspace. Query objects
-add or replace templates by ID; `null` disables a bundled template:
+Create `.nimbalyst/tracker-plus.queries.json` in the workspace. Its `queries`
+object replaces the complete runtime saved-query inventory. Query IDs absent
+from the file do not exist at runtime, and `null` entries are invalid.
 
-For a copy-ready catalog containing neutral predicate, traversal, and composed
-examples, start with
+For a copy-ready catalog containing neutral predicate and traversal examples,
+start with
 [`examples/tracker-plus.queries.json`](../examples/tracker-plus.queries.json).
 
 ```json
@@ -500,18 +492,17 @@ examples, start with
         "limit": 100,
         "includeTotalCount": true
       }
-    },
-    "launch-open-reviews": null
+    }
   }
 }
 ```
 
 The complete catalog is validated before activation. An invalid catalog is
-ignored atomically, bundled defaults remain active, and the response reports a
+ignored atomically, no saved queries become active, and the response reports a
 registry override warning. The effective query catalog contributes to
 `registryHash`, so agents can detect configuration changes. The older
-`savedQueries` key in `tracker-plus.registry.json` remains supported for
-compatibility, but the dedicated catalog is the preferred public interface.
+`savedQueries` key in `tracker-plus.registry.json` is rejected; move those
+definitions into the dedicated catalog before upgrading.
 
 Catalog entries may use `kind: "predicate"`, `kind: "traversal"`, or
 `kind: "composed"`. A composed definition runs a bounded `select` predicate,
@@ -520,26 +511,13 @@ uses the selected item IDs as traversal roots, and then applies a typed
 root cap; otherwise a fail-closed template returns `RESULT_TRUNCATED` without
 a partial graph.
 
-The optional `walk-readiness-v1` projection recognizes only native
-`walkStage` values `local-verifiable`, `production-only`, or `mixed` and native
-`buildState` values `build-complete`, `in-build`, or `not-started`. Unsupported
-or absent values normalize to `unknown`; titles and tags are never used to
-infer a positive state. A nonterminal root is `walk-ready` only when:
+Tracker+ 0.9 removes the project-specific `walk-readiness-v1` projection.
+Workspace catalogs can still define generic composed queries that select roots
+and expand typed dependency or evidence relationships, but the extension does
+not derive readiness from `walkStage`, `buildState`, comments, tags, or any
+other installation-specific field.
 
-- its stored build-complete state has resolved active `implements` or
-  `evidences` relationship evidence;
-- every selected hard-serial predecessor is cleared;
-- `requiredRuntimeAvailable` is explicitly `true`; and
-- native gate or acceptance content is present.
-
-The result includes `serialPredecessor`, `blockingCondition`,
-`blockingOwner`, a single numerator/denominator/percentage/fraction metric,
-and stored-versus-derived provenance. A terminal selected root is authoritative:
-it is reported as 100% walk-ready and stale child evidence does not reopen it.
-Role-distinct relationship edges remain separate; only exact semantic
-duplicates share an identity.
-
-An invalid override is ignored as a whole. Bundled defaults remain active and
+An invalid override is ignored as a whole. No saved queries remain active and
 every response reports `registry-override-invalid`. Overrides cannot change
 relationship types, scope roles, executable types, caps, or registry version.
 
@@ -786,12 +764,12 @@ nodes. Clearing it restores the whole snapshot; it never edits tracker data.
 
 ## Registry overrides
 
-Tracker+ ships structural policy in `reader/registry.json` and query templates
-in `reader/saved-queries.json`. A workspace may override `terminalStatuses`,
-`roles`, legacy `savedQueries`, and the complete `dispatchPolicy` through
-`.nimbalyst/tracker-plus.registry.json`. Roles and legacy saved queries merge
-by ID; terminal statuses and dispatch policy replace their complete defaults.
-Use `.nimbalyst/tracker-plus.queries.json` for normal query-catalog management.
+Tracker+ ships structural policy in `reader/registry.json` and an empty,
+integrity-checked query catalog in `reader/saved-queries.json`. A workspace may
+override `terminalStatuses`, `roles`, and the complete `dispatchPolicy` through
+`.nimbalyst/tracker-plus.registry.json`. Roles merge by ID; terminal statuses
+and dispatch policy replace their complete defaults. Saved queries exist only
+in `.nimbalyst/tracker-plus.queries.json`.
 
 `relationshipTypes`, `scopeRoles`, `executableTypes`, `caps`, and `version` are
 locked. Any malformed or locked override is ignored atomically and produces

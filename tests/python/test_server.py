@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -126,6 +127,10 @@ class ReaderServerTests(unittest.TestCase):
                     }
                 }),
                 encoding="utf-8",
+            )
+            shutil.copyfile(
+                ROOT / "examples" / "tracker-plus.queries.json",
+                registry_dir / "tracker-plus.queries.json",
             )
             requests = [
                 {

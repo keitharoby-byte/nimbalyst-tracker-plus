@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.0 - 2026-08-11
+
+- Make `.nimbalyst/tracker-plus.queries.json` the complete authoritative saved-
+  query inventory for each workspace. The integrity-checked bundled catalog is
+  empty, missing or invalid workspace catalogs activate no queries, `null`
+  entries are rejected, and legacy registry `savedQueries` no longer merge.
+- Move the six reusable predicate and traversal templates to the copy-ready
+  example catalog with stable IDs. Remove the injected
+  `walk-ready-milestones` query and project-specific `walk-readiness-v1`
+  projection while preserving generic composed-query support. (#30)
+- Validate against Nimbalyst 0.72.8 and update fixable transitive development
+  dependencies without crossing SDK or host major-version boundaries.
+
 ## 0.8.2 - 2026-08-10
 
 - Honor configured role `attentionTags` alongside owner aliases during

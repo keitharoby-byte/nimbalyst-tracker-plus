@@ -34,8 +34,10 @@ backends disabled until the user approves their first-use native-code prompts.
 - Workspace policy overrides are read only from
   `.nimbalyst/tracker-plus.registry.json`; saved-query catalog overrides are
   read only from `.nimbalyst/tracker-plus.queries.json`. Both are validated
-  atomically. Locked vocabulary/cap keys or malformed query definitions leave
-  bundled defaults active and surface a warning in every response.
+  atomically. The query catalog replaces the complete saved-query inventory;
+  missing or malformed catalogs activate no saved queries. Locked
+  vocabulary/cap keys or malformed definitions surface a warning in every
+  response.
 - Comment bodies are capped at 20,000 Unicode characters. Tracker bodies are
   capped at 100,000 characters. Each serialized result page is capped below the
   512-KiB process-line ceiling. Predicate queries and opt-in standard

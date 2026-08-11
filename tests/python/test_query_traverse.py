@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -26,6 +27,10 @@ class QueryTraverseTests(unittest.TestCase):
             "type: timeline-item\n"
             "displayName: Timeline Item\n",
             encoding="utf-8",
+        )
+        shutil.copyfile(
+            ROOT / "examples" / "tracker-plus.queries.json",
+            Path(self.workspace) / ".nimbalyst" / "tracker-plus.queries.json",
         )
         self.db_path = Path(self.tempdir.name) / "fixture.sqlite"
         with closing(sqlite3.connect(self.db_path)) as connection:
@@ -185,7 +190,6 @@ class QueryTraverseTests(unittest.TestCase):
                         "limit": 10,
                     },
                 },
-                "launch-open-reviews": None,
             },
         }
         (Path(self.workspace) / ".nimbalyst" / "tracker-plus.queries.json").write_text(
@@ -221,7 +225,6 @@ class QueryTraverseTests(unittest.TestCase):
                 {
                     "title": "Workspace selected control root",
                     "status": "active",
-                    "walkStage": "local-verifiable",
                 },
             )
             self._link(
@@ -284,153 +287,25 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual([edge["id"] for edge in result["edges"]], ["workspace-composed-edge"])
         self.assertTrue(result["query"]["selection"]["complete"])
 
-    def test_walk_ready_composition_is_evidence_backed_and_terminal_authoritative(self) -> None:
-        with closing(sqlite3.connect(self.db_path)) as connection:
-            self._insert(
-                connection,
-                "walk-blocked",
-                "CONTROL-20",
-                "feature",
-                {
-                    "title": "Blocked walk control",
-                    "status": "active",
-                    "buildState": "build-complete",
-                    "walkStage": "local-verifiable",
-                    "requiredRuntimeAvailable": True,
-                    "gate": "Walk the completed behavior",
-                },
-            )
-            self._insert(
-                connection,
-                "walk-terminal",
-                "CONTROL-21",
-                "feature",
-                {
-                    "title": "Completed walk control",
-                    "status": "done",
-                    "buildState": "build-complete",
-                    "walkStage": "production-only",
-                    "requiredRuntimeAvailable": False,
-                },
-            )
-            self._insert(
-                connection,
-                "walk-unverified",
-                "CONTROL-22",
-                "feature",
-                {
-                    "title": "Unverified walk control",
-                    "status": "active",
-                    "buildState": "build-complete",
-                    "walkStage": "mixed",
-                    "requiredRuntimeAvailable": True,
-                    "gate": "Verify the merged behavior",
-                },
-            )
-            self._insert(
-                connection,
-                "implementing-artifact",
-                "ARTIFACT-20",
-                "document",
-                {"title": "Merged implementation evidence", "status": "active"},
-            )
-            self._insert(
-                connection,
-                "walk-predecessor",
-                "CONTROL-19",
-                "task",
-                {"title": "Required predecessor", "status": "active"},
-            )
-            self._link(
-                connection,
-                "walk-implements",
-                "CONTROL-REL-20",
-                "implementing-artifact",
-                "walk-blocked",
-                "implements",
-            )
-            self._link(
-                connection,
-                "walk-blocker",
-                "CONTROL-REL-21",
-                "walk-blocked",
-                "walk-predecessor",
-                "depends-on",
-                hardness="hard-serial",
-                clearing_condition="Predecessor acceptance is complete",
-                owner="reviewer",
-            )
-            self._link(
-                connection,
-                "walk-terminal-stale-blocker",
-                "CONTROL-REL-22",
-                "walk-terminal",
-                "walk-predecessor",
-                "depends-on",
-                hardness="hard-serial",
-                clearing_condition="Stale child condition",
-                owner="reviewer",
-            )
-            connection.commit()
-
-        result = self.reader.traverse_graph({
-            "workspacePath": self.workspace,
-            "savedQuery": {"id": "walk-ready-milestones", "params": {}},
-        })
-        roots = {node["id"]: node for node in result["nodes"]}
-
-        self.assertEqual(set(roots), {"walk-blocked", "walk-terminal", "walk-unverified"})
-        self.assertEqual(roots["walk-blocked"]["buildState"], "build-complete")
-        self.assertEqual(roots["walk-blocked"]["readiness"], "blocked")
-        self.assertEqual(
-            roots["walk-blocked"]["serialPredecessor"]["relationshipId"],
-            "walk-blocker",
-        )
-        self.assertEqual(
-            roots["walk-blocked"]["walkReadinessProvenance"]["implementingEvidence"],
-            [{
-                "itemId": "implementing-artifact",
-                "issueKey": "ARTIFACT-20",
-                "relationshipId": "walk-implements",
-                "relationshipType": "implements",
-            }],
-        )
-        self.assertEqual(roots["walk-terminal"]["readiness"], "walk-ready")
-        self.assertEqual(roots["walk-terminal"]["walkReadiness"]["percentage"], 100)
-        self.assertIsNone(roots["walk-terminal"]["serialPredecessor"])
-        self.assertEqual(roots["walk-unverified"]["buildState"], "unknown")
-        self.assertEqual(roots["walk-unverified"]["readiness"], "unknown")
-        self.assertIn(
-            "walk-build-evidence-missing",
-            {finding["code"] for finding in result["validation"]["findings"]},
-        )
-        self.assertFalse(result["page"]["truncated"])
-        self.assertTrue(result["query"]["selection"]["complete"])
-
-    def test_walk_ready_composition_fails_closed_when_root_selection_overflows(self) -> None:
-        with closing(sqlite3.connect(self.db_path)) as connection:
-            for index in range(9):
-                self._insert(
-                    connection,
-                    f"walk-overflow-{index}",
-                    f"CONTROL-{100 + index}",
-                    "feature",
-                    {
-                        "title": f"Walk control {index}",
-                        "status": "active",
-                        "buildState": "build-complete",
-                        "walkStage": "local-verifiable",
-                    },
-                )
-            connection.commit()
-
+    def test_walk_readiness_is_not_injected_or_required(self) -> None:
         with self.assertRaises(ReaderError) as raised:
             self.reader.traverse_graph({
                 "workspacePath": self.workspace,
                 "savedQuery": {"id": "walk-ready-milestones", "params": {}},
             })
+        self.assertEqual(raised.exception.code, "SAVED_QUERY_NOT_FOUND")
 
-        self.assertEqual(raised.exception.code, "RESULT_TRUNCATED")
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "exists", "value": True},
+            "limit": 10,
+        })
+        self.assertFalse(
+            any(
+                finding["code"].startswith("walk-")
+                for finding in result["validation"]["findings"]
+            )
+        )
 
     def test_query_cursor_reconciles_total_count(self) -> None:
         params = {"workspacePath": self.workspace, "where": {"field": "issueKey", "op": "exists", "value": True}, "sort": [{"field": "id", "direction": "asc"}], "limit": 200}

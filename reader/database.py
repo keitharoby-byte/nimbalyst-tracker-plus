@@ -1216,12 +1216,11 @@ class NativeTrackerReader:
         started: float,
     ) -> dict[str, Any]:
         """Select bounded roots, then traverse them as one saved-query result."""
-        allowed = {"mode", "select", "traverse", "projection", "failOn"}
+        allowed = {"mode", "select", "traverse", "failOn"}
         if set(definition) - allowed:
             raise ReaderError("QUERY_INVALID", "The composed saved query contains unknown fields.")
         select = definition.get("select")
         traverse = definition.get("traverse", {})
-        projection = definition.get("projection")
         fail_on = definition.get("failOn", {})
         if not isinstance(select, Mapping) or not isinstance(traverse, Mapping):
             raise ReaderError("QUERY_INVALID", "The composed saved query requires select and traverse objects.")
@@ -1325,14 +1324,6 @@ class NativeTrackerReader:
                 },
             }
         )
-        if projection == "walk-readiness-v1":
-            self._apply_walk_readiness_projection(
-                traversal,
-                set(root_ids[:root_cap]),
-            )
-        elif projection is not None:
-            raise ReaderError("QUERY_INVALID", "The composed saved query projection is unsupported.")
-
         traversal["query"] = {
             **dict(query_echo),
             "mode": "composed-v1",
@@ -1343,7 +1334,6 @@ class NativeTrackerReader:
             "nodeWhere": traversal["query"]["nodeWhere"],
             "limits": traversal["query"]["limits"],
             "failOn": dict(fail_on),
-            "projection": projection,
         }
         traversal["query"]["queryFingerprint"] = self._stable_fingerprint(
             {
@@ -1368,185 +1358,6 @@ class NativeTrackerReader:
                 {"validation": fitted["validation"]},
             )
         return fitted
-
-    def _apply_walk_readiness_projection(
-        self,
-        result: dict[str, Any],
-        root_ids: set[str],
-    ) -> None:
-        """Attach evidence-backed walk controls without inferring from labels."""
-        items = {
-            str(item["id"]): item
-            for item in [*result["nodes"], *result["boundaryNodes"]]
-        }
-        findings = list(result["validation"]["findings"])
-        terminal = {
-            str(value).casefold()
-            for value in self._registry["terminalStatuses"]
-        }
-        for root_id in sorted(root_ids):
-            root = items.get(root_id)
-            if root is None:
-                continue
-            workflow_terminal = str(root.get("status") or "").casefold() in terminal
-            predecessor_edges = sorted(
-                (
-                    edge
-                    for edge in result["edges"]
-                    if edge.get("sourceId") == root_id
-                    and edge.get("relationshipType") == "depends-on"
-                    and edge.get("hardness") == "hard-serial"
-                    and edge.get("state") in {"active", "blocked"}
-                ),
-                key=lambda edge: edge["id"],
-            )
-            implementing_edges = sorted(
-                (
-                    edge
-                    for edge in result["edges"]
-                    if edge.get("targetId") == root_id
-                    and edge.get("relationshipType") in {"implements", "evidences"}
-                    and edge.get("state") == "active"
-                    and edge.get("sourceId") in items
-                ),
-                key=lambda edge: edge["id"],
-            )
-            provenance = dict(root.get("walkReadinessProvenance") or {})
-            stored_build = (
-                (provenance.get("buildState") or {}).get("storedValue")
-                if isinstance(provenance.get("buildState"), Mapping)
-                else None
-            )
-            walk_stage = root.get("walkStage")
-            acceptance_present = bool(provenance.get("acceptanceContentPresent"))
-            runtime_available = root.get("requiredRuntimeAvailable")
-
-            if workflow_terminal:
-                build_state = "build-complete"
-                readiness = "walk-ready"
-                predecessor_rows: list[dict[str, Any]] = []
-                numerator, denominator = 1, 1
-            else:
-                predecessor_rows = [
-                    {
-                        "itemId": edge["targetId"],
-                        "issueKey": items.get(edge["targetId"], {}).get("issueKey"),
-                        "relationshipId": edge["id"],
-                        "state": edge["state"],
-                        "clearingCondition": edge.get("clearingCondition"),
-                        "ownerLabel": edge.get("ownerLabel"),
-                    }
-                    for edge in predecessor_edges
-                ]
-                if stored_build == "build-complete" and implementing_edges:
-                    build_state = "build-complete"
-                elif stored_build in {"in-build", "not-started"}:
-                    build_state = stored_build
-                else:
-                    build_state = "unknown"
-                gates = [
-                    build_state == "build-complete",
-                    not predecessor_rows,
-                    runtime_available is True,
-                ]
-                numerator, denominator = sum(gates), len(gates)
-                if (
-                    walk_stage == "unknown"
-                    or build_state == "unknown"
-                    or runtime_available is None
-                    or not acceptance_present
-                ):
-                    readiness = "unknown"
-                elif predecessor_rows:
-                    readiness = "blocked"
-                elif build_state != "build-complete" or runtime_available is not True:
-                    readiness = "not-ready"
-                else:
-                    readiness = "walk-ready"
-
-            root["buildState"] = build_state
-            root["readiness"] = readiness
-            root["serialPredecessor"] = predecessor_rows[0] if predecessor_rows else None
-            root["serialPredecessors"] = predecessor_rows
-            root["blockingCondition"] = (
-                predecessor_rows[0].get("clearingCondition")
-                if predecessor_rows
-                else None
-            )
-            root["blockingOwner"] = (
-                predecessor_rows[0].get("ownerLabel")
-                if predecessor_rows
-                else None
-            )
-            root["walkReadiness"] = {
-                "numerator": numerator,
-                "denominator": denominator,
-                "percentage": round((numerator / denominator) * 100, 2),
-                "fraction": f"{numerator}/{denominator}",
-            }
-            root["walkReadinessProvenance"] = {
-                **provenance,
-                "workflowTerminal": workflow_terminal,
-                "implementingEvidence": [
-                    {
-                        "itemId": edge["sourceId"],
-                        "issueKey": items[edge["sourceId"]].get("issueKey"),
-                        "relationshipId": edge["id"],
-                        "relationshipType": edge["relationshipType"],
-                    }
-                    for edge in implementing_edges
-                ],
-                "buildState": {
-                    "storedValue": stored_build,
-                    "derivedValue": build_state,
-                    "derived": build_state != stored_build,
-                },
-                "readiness": {
-                    "storedValue": (
-                        (provenance.get("readiness") or {}).get("storedValue")
-                        if isinstance(provenance.get("readiness"), Mapping)
-                        else None
-                    ),
-                    "derivedValue": readiness,
-                    "derived": True,
-                },
-                "metricBasis": [
-                    "build-complete",
-                    "hard-serial-predecessors-cleared",
-                    "required-runtime-available",
-                ] if not workflow_terminal else ["terminal-root"],
-            }
-            if workflow_terminal:
-                continue
-            if walk_stage == "unknown":
-                findings.append(self._finding(
-                    "walk-stage-unknown",
-                    "warning",
-                    "A selected walk root has no supported native walkStage value.",
-                    item_ids=[root_id],
-                ))
-            if not acceptance_present:
-                findings.append(self._finding(
-                    "walk-acceptance-content-missing",
-                    "warning",
-                    "A selected walk root has no native gate or acceptance content.",
-                    item_ids=[root_id],
-                ))
-            if stored_build == "build-complete" and not implementing_edges:
-                findings.append(self._finding(
-                    "walk-build-evidence-missing",
-                    "warning",
-                    "Stored build-complete state has no resolved active implementing evidence.",
-                    item_ids=[root_id],
-                ))
-            if runtime_available is None:
-                findings.append(self._finding(
-                    "walk-runtime-availability-unknown",
-                    "warning",
-                    "Required runtime availability is not explicitly recorded.",
-                    item_ids=[root_id],
-                ))
-        result["validation"] = self._validation_block(findings)
 
     def _dispatch_eligible_work(
         self,

@@ -43,6 +43,7 @@ class RegistryTests(unittest.TestCase):
             manifest = self._bundle_fixture(root)
             registry, diagnostics = _load_bundle_from(root, require_manifest=True)
             self.assertEqual(registry["version"], 4)
+            self.assertEqual(registry["savedQueries"], {})
             self.assertEqual(diagnostics["verificationState"], "verified")
             self.assertEqual(diagnostics["extensionVersion"], "9.9.9")
             self.assertEqual(diagnostics["adapterVersion"], 3)
@@ -120,14 +121,21 @@ class RegistryTests(unittest.TestCase):
                 [{"kind": "field", "field": "qaStatus"}],
             )
 
-    def test_external_query_catalog_can_replace_add_and_remove_queries(self) -> None:
+    def test_missing_query_catalog_has_no_saved_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry, active, error, _registry_hash = effective_registry(directory)
+
+            self.assertFalse(active)
+            self.assertIsNone(error)
+            self.assertEqual(registry["savedQueries"], {})
+
+    def test_external_query_catalog_is_the_complete_query_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / ".nimbalyst").mkdir()
             catalog = {
                 "version": 1,
                 "queries": {
-                    "launch-open-reviews": None,
                     "workspace-ready-items": {
                         "version": 1,
                         "kind": "predicate",
@@ -150,8 +158,50 @@ class RegistryTests(unittest.TestCase):
             registry, active, error, _registry_hash = effective_registry(root)
             self.assertTrue(active)
             self.assertIsNone(error)
-            self.assertNotIn("launch-open-reviews", registry["savedQueries"])
-            self.assertIn("workspace-ready-items", registry["savedQueries"])
+            self.assertEqual(set(registry["savedQueries"]), {"workspace-ready-items"})
+
+    def test_null_query_entries_are_invalid_in_an_authoritative_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_directory = root / ".nimbalyst"
+            config_directory.mkdir()
+            (config_directory / "tracker-plus.queries.json").write_text(
+                json.dumps({"version": 1, "queries": {"legacy-query": None}}),
+                encoding="utf-8",
+            )
+
+            registry, active, error, _registry_hash = effective_registry(root)
+
+            self.assertFalse(active)
+            self.assertIsNotNone(error)
+            self.assertEqual(registry["savedQueries"], {})
+
+    def test_legacy_registry_saved_queries_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_directory = root / ".nimbalyst"
+            config_directory.mkdir()
+            (config_directory / "tracker-plus.registry.json").write_text(
+                json.dumps({
+                    "savedQueries": {
+                        "legacy-query": {
+                            "version": 1,
+                            "kind": "predicate",
+                            "params": [],
+                            "definition": {
+                                "where": {"field": "status", "op": "eq", "value": "ready"},
+                            },
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+
+            registry, active, error, _registry_hash = effective_registry(root)
+
+            self.assertFalse(active)
+            self.assertIsNotNone(error)
+            self.assertEqual(registry["savedQueries"], {})
 
     def test_published_external_query_catalog_is_valid(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -167,16 +217,19 @@ class RegistryTests(unittest.TestCase):
 
             self.assertTrue(active)
             self.assertIsNone(error)
+            published = json.loads(
+                (ROOT / "examples" / "tracker-plus.queries.json").read_text(
+                    encoding="utf-8",
+                )
+            )["queries"]
+            self.assertEqual(set(registry["savedQueries"]), set(published))
+            self.assertNotIn("walk-ready-milestones", registry["savedQueries"])
             self.assertEqual(
                 {
-                    registry["savedQueries"][query_id]["kind"]
-                    for query_id in (
-                        "workspace-ready-items",
-                        "workspace-walk-readiness",
-                        "workspace-launch-scope",
-                    )
+                    query["kind"]
+                    for query in registry["savedQueries"].values()
                 },
-                {"predicate", "composed", "traversal"},
+                {"predicate", "traversal"},
             )
 
 

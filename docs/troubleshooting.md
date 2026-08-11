@@ -18,8 +18,8 @@ reading production comments again.
 
 ## `timeline-item-schema-missing-with-live-rows`
 
-Nimbalyst 0.71.3 scopes tracker-type definitions to the project that registered
-them. If a workspace still has live legacy `timeline-item` database rows but
+Nimbalyst scopes tracker-type definitions to the project that registered them.
+If a workspace still has live legacy `timeline-item` database rows but
 does not contain a matching schema in `.nimbalyst/trackers`, native type
 discovery can omit the type even though direct reads still succeed.
 

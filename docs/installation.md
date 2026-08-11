@@ -44,8 +44,10 @@ saved queries:
    workspace.
 2. Copy
    [`examples/tracker-plus.queries.json`](../examples/tracker-plus.queries.json)
-   to `.nimbalyst/tracker-plus.queries.json`, then edit the predicate,
-   traversal, or composed templates as needed.
+   to `.nimbalyst/tracker-plus.queries.json`, then edit or remove the predicate
+   and traversal templates as needed. This file is the workspace's complete
+   query inventory; without it, no saved queries are active. Generic composed
+   queries can be added using the agent-guide contract.
 3. Invoke each configured saved query once and inspect its echoed definition,
    `validation`, `page`, `watermark`, registry hash, and query fingerprint
    before an agent acts on the result.
