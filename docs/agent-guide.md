@@ -348,8 +348,16 @@ only exclude a packet.
 
 Scope comes only from active primary/core normalized relationships:
 `part-of-launch.scopeRole` and
-`contributes-to.contributionRole`. Receipts include launch, milestone, and
-train ancestry plus the stable native relationship IDs used to prove it.
+`contributes-to.contributionRole`. Launch admission follows qualifying
+ancestry up to the bounded traversal depth: an item placed under an
+intermediate milestone or review container whose own qualifying relationship
+reaches a selected launch is admitted to that launch's scope. A direct
+item-to-launch relationship remains supported but is never required in
+addition to a qualifying transitive path — no duplicate direct placement is
+needed. Supporting, review, evidence, retired, or otherwise non-qualifying
+relationships never establish scope at any hop. Receipts include launch,
+milestone, and train ancestry plus the stable native relationship IDs used to
+prove it, with each hop's relationship reported on its own ancestry row.
 Retired, archived, filtered, and out-of-boundary relationships are excluded
 before duplicate validation. Parallel relationships remain distinct when
 their scope or contribution role differs.

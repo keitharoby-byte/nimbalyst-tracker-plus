@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Document and regression-test that dispatch launch admission follows
+  qualifying active ancestry (for example item → milestone → launch) within
+  the bounded traversal depth, without requiring a duplicate direct
+  item-to-launch relationship, and that non-qualifying scope roles never
+  establish scope. Receipts already report each hop's relationship ID on its
+  own ancestry row; no engine behavior changed.
+
 ## 0.9.1 - 2026-08-17
 
 - Scope predicate and role-query launch validation to the selected page plus

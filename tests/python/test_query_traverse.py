@@ -1370,6 +1370,102 @@ class QueryTraverseTests(unittest.TestCase):
         )
         self.assertEqual(first["validation"]["state"], "pass")
 
+    def test_dispatch_transitive_milestone_ancestry_admits_without_direct_edge(self) -> None:
+        ready = {
+            "status": "ready",
+            "owner": "coordinator",
+            "packetRevision": "rev-9",
+            "currentRevision": "rev-9",
+            "qaEvidenceRevision": "rev-9",
+            "qaStatus": "passed",
+            "holdState": "clear",
+            "databaseRouteState": "approved",
+            "custodyState": "vacant",
+            "survivorState": "unique",
+            "collisionState": "clear",
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "bridge-milestone", "NIM-BRIDGE-M", "milestone", {
+                "title": "Intermediate milestone",
+                "status": "active",
+                "targetDate": "2026-09-01",
+            })
+            self._insert(connection, "dispatch-transitive", "NIM-DISPATCH-T", "task", {
+                **ready,
+                "title": "Transitively scoped packet",
+            })
+            self._insert(connection, "dispatch-supporting", "NIM-DISPATCH-S", "task", {
+                **ready,
+                "title": "Supporting-role packet",
+            })
+            self._link(
+                connection,
+                "transitive-milestone-membership",
+                "REL-TRANSITIVE-MS",
+                "dispatch-transitive",
+                "bridge-milestone",
+                "part-of-launch",
+                scope_role="core",
+            )
+            self._link(
+                connection,
+                "transitive-launch-membership",
+                "REL-TRANSITIVE-LAUNCH",
+                "bridge-milestone",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            self._link(
+                connection,
+                "supporting-launch-membership",
+                "REL-SUPPORTING-LAUNCH",
+                "dispatch-supporting",
+                "launch-1",
+                "part-of-launch",
+                scope_role="supporting",
+            )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        })
+
+        self.assertEqual(
+            [node["id"] for node in result["nodes"]],
+            ["dispatch-transitive"],
+        )
+        receipt = next(
+            entry for entry in result["receipts"]
+            if entry["itemId"] == "dispatch-transitive"
+        )
+        self.assertTrue(receipt["included"])
+        self.assertEqual(
+            [(row["id"], row["relationshipIds"]) for row in receipt["ancestry"]["milestones"]],
+            [("bridge-milestone", ["transitive-milestone-membership"])],
+        )
+        self.assertEqual(
+            [(row["id"], row["relationshipIds"]) for row in receipt["ancestry"]["launches"]],
+            [("launch-1", ["transitive-launch-membership"])],
+        )
+        # The fixture intentionally has no direct task -> launch edge; admission
+        # is proved entirely by the two-hop qualifying ancestry above.
+        self.assertFalse([
+            edge for edge in result["edges"]
+            if edge["sourceId"] == "dispatch-transitive" and edge["targetId"] == "launch-1"
+        ])
+        candidate_ids = {entry["itemId"] for entry in result["receipts"]}
+        self.assertNotIn("dispatch-supporting", candidate_ids)
+        self.assertGreaterEqual(
+            result["admission"]["preAdmissionReasonCounts"]["scope-not-admitted"],
+            1,
+        )
+        self.assertEqual(result["validation"]["state"], "pass")
+
     def test_dispatch_large_workspace_summarizes_pre_admission_exclusions(self) -> None:
         ready = {
             "status": "ready",
