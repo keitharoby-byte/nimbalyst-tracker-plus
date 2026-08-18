@@ -754,22 +754,78 @@ class NativeTrackerReader:
             nodes.append(item)
             raw_fields[item["id"]] = fields
         edges, edge_findings = self._normalized_relationships(nodes, raw_fields, link_rows)
-        validation_items: list[dict[str, Any]] = []
-        validation_fields: dict[str, dict[str, Any]] = {}
-        validation_links: list[tuple[sqlite3.Row, dict[str, Any]]] = []
+        all_validation_items: list[dict[str, Any]] = []
+        all_validation_fields: dict[str, dict[str, Any]] = {}
+        all_validation_links: list[tuple[sqlite3.Row, dict[str, Any]]] = []
         for row in validation_rows:
             fields = self._flatten_custom_fields(self._parse_data(row))
             if row["type"] == "timeline-link":
-                validation_links.append((row, fields))
+                all_validation_links.append((row, fields))
             elif not row["archived"]:
                 item = self._timeline_item(row, fields)
-                validation_items.append(item)
-                validation_fields[item["id"]] = fields
-        validation_edges, validation_edge_findings = self._normalized_relationships(validation_items, validation_fields, validation_links)
+                all_validation_items.append(item)
+                all_validation_fields[item["id"]] = fields
+
+        selected_node_ids = {node["id"] for node in nodes}
+        selected_launch_ids = {
+            node["id"] for node in nodes
+            if node.get("primaryType") == "launch" and not node.get("archived")
+        }
+        validation_node_ids = set(selected_node_ids)
+        validation_link_ids: set[str] = set()
+        incoming_memberships: dict[str, list[tuple[sqlite3.Row, dict[str, Any]]]] = {}
+        for row, fields in all_validation_links:
+            if bool(row["archived"]):
+                continue
+            targets = self._relationship_targets(fields.get("targetItem"))
+            if len(targets) == 1:
+                incoming_memberships.setdefault(targets[0]["itemId"], []).append((row, fields))
+        for memberships in incoming_memberships.values():
+            memberships.sort(key=lambda entry: str(entry[0]["id"]))
+
+        frontier = sorted(selected_launch_ids)
+        inspected_targets: set[str] = set()
+        while frontier:
+            target_id = frontier.pop(0)
+            if target_id in inspected_targets:
+                continue
+            inspected_targets.add(target_id)
+            for row, fields in incoming_memberships.get(target_id, []):
+                link_id = str(row["id"])
+                validation_link_ids.add(link_id)
+                sources = self._relationship_targets(fields.get("sourceItem"))
+                targets = self._relationship_targets(fields.get("targetItem"))
+                validation_node_ids.update(source["itemId"] for source in sources)
+                validation_node_ids.update(target["itemId"] for target in targets)
+                if fields.get("status") == "active" and len(sources) == 1:
+                    source_id = sources[0]["itemId"]
+                    if source_id not in inspected_targets:
+                        frontier.append(source_id)
+            frontier.sort()
+
+        validation_item_by_id = {
+            item["id"]: item for item in [*all_validation_items, *nodes]
+        }
+        validation_items = [
+            validation_item_by_id[item_id]
+            for item_id in sorted(validation_node_ids)
+            if item_id in validation_item_by_id
+        ]
+        validation_fields = {
+            item_id: (all_validation_fields.get(item_id) or raw_fields.get(item_id, {}))
+            for item_id in validation_node_ids
+        }
+        validation_links = [
+            (row, fields) for row, fields in all_validation_links
+            if str(row["id"]) in validation_link_ids
+        ]
+        validation_edges, validation_edge_findings = self._normalized_relationships(
+            validation_items, validation_fields, validation_links
+        )
         rollup_source_ids = sorted({
             edge["sourceId"] for edge in validation_edges
             if edge.get("relationshipType") == "part-of-launch" and edge.get("state") == "active" and edge.get("scopeRole") in {"core", "acceptance"}
-        } | {item["id"] for item in validation_items if item.get("primaryType") == "launch"})
+        } | selected_launch_ids)
         if rollup_source_ids:
             placeholders = ",".join("?" for _ in rollup_source_ids)
             with self._connect() as connection:
@@ -782,21 +838,85 @@ class NativeTrackerReader:
                     (workspace_path, *rollup_source_ids),
                 ).fetchall()
             if dependency_rows:
-                validation_links.extend((row, self._flatten_custom_fields(self._parse_data(row))) for row in dependency_rows)
-                validation_edges, validation_edge_findings = self._normalized_relationships(validation_items, validation_fields, validation_links)
+                dependency_links = [
+                    (row, self._flatten_custom_fields(self._parse_data(row)))
+                    for row in dependency_rows
+                ]
+                validation_links.extend(dependency_links)
+                validation_link_ids.update(str(row["id"]) for row, _ in dependency_links)
+                for _, fields in dependency_links:
+                    for endpoint_name in ("sourceItem", "targetItem"):
+                        validation_node_ids.update(
+                            endpoint["itemId"]
+                            for endpoint in self._relationship_targets(fields.get(endpoint_name))
+                        )
+                validation_items = [
+                    validation_item_by_id[item_id]
+                    for item_id in sorted(validation_node_ids)
+                    if item_id in validation_item_by_id
+                ]
+                validation_fields = {
+                    item_id: (all_validation_fields.get(item_id) or raw_fields.get(item_id, {}))
+                    for item_id in validation_node_ids
+                }
+                validation_edges, validation_edge_findings = self._normalized_relationships(
+                    validation_items, validation_fields, validation_links
+                )
         self._apply_launch_rollups(validation_items, validation_edges)
         rollups = {item["id"]: item.get("launchRollup") for item in validation_items if item.get("launchRollup")}
         for node in nodes:
             if node["id"] in rollups:
                 node["launchRollup"] = rollups[node["id"]]
                 node["progress"] = rollups[node["id"]]["derivedProgress"]
+        scoped_item_ids = {item["id"] for item in validation_items}
+        endpoint_findings: list[dict[str, Any]] = []
+        for edge in validation_edges:
+            missing_endpoint_ids = sorted({
+                endpoint_id
+                for endpoint_id in (edge["sourceId"], edge["targetId"])
+                if endpoint_id not in scoped_item_ids
+            })
+            for endpoint_id in missing_endpoint_ids:
+                endpoint_findings.append(self._finding(
+                    "orphan-endpoint",
+                    "error",
+                    f"Relationship {edge.get('issueKey') or edge['id']} has an unavailable endpoint.",
+                    item_ids=[endpoint_id],
+                    relationship_ids=[edge["id"]],
+                ))
+        validation_scope_complete = (
+            len(validation_node_ids) <= caps["traverseNodesMax"]
+            and len(validation_link_ids) <= caps["traverseEdgesMax"]
+        )
+        scope_findings = [] if validation_scope_complete else [self._finding(
+            "validation-scope-limit-exceeded",
+            "error",
+            "The query-local validation closure exceeds the configured graph limits.",
+        )]
         findings = [
             *self._registry_findings(),
             *self._schema_discovery_findings(schema_discovery),
             *edge_findings,
             *validation_edge_findings,
+            *endpoint_findings,
+            *scope_findings,
+            *self._semantic_duplicate_findings(validation_edges),
             *self._launch_findings(validation_items, validation_edges),
         ]
+        validation_scope_payload = {
+            "type": "query-local",
+            "selectedNodeIds": sorted(selected_node_ids),
+            "contextNodeIds": sorted(validation_node_ids - selected_node_ids),
+            "relationshipIds": sorted(validation_link_ids),
+        }
+        validation_scope = {
+            "type": validation_scope_payload["type"],
+            "selectedNodeCount": len(selected_node_ids),
+            "contextNodeCount": len(validation_node_ids - selected_node_ids),
+            "relationshipCount": len(validation_link_ids),
+            "complete": validation_scope_complete,
+            "fingerprint": self._stable_fingerprint(validation_scope_payload),
+        }
         result = {
             "nodes": nodes,
             "edges": sorted(edges, key=lambda edge: edge["id"]),
@@ -828,6 +948,7 @@ class NativeTrackerReader:
                 "includeArchived": include_archived,
                 "includeRelationshipRecords": include_links,
                 "includeTotalCount": include_total,
+                "validationScope": validation_scope,
             },
         }
         result["query"]["queryFingerprint"] = self._stable_fingerprint(
@@ -1369,6 +1490,21 @@ class NativeTrackerReader:
         policy = self._registry["dispatchPolicy"]
         evidence_mapping = self._registry["dispatchEvidence"]
         evidence_mapping_fingerprint = self._stable_fingerprint(evidence_mapping)
+        currentness_sources: list[dict[str, Any]] = []
+        for signal, value_type, constraint in (
+            ("currentRevision", "string", "equals packetRevision"),
+            ("isCurrentRevision", "boolean", "true"),
+        ):
+            for source in evidence_mapping[signal]["sources"]:
+                currentness_sources.append({
+                    "logicalEvidence": signal,
+                    "type": value_type,
+                    "constraint": constraint,
+                    **copy.deepcopy(source),
+                })
+        accepted_logical_sources = {
+            "revision-currentness": currentness_sources,
+        }
         saved = query_echo["savedQuery"]
         params = dict(saved.get("params", {}))
         launch_keys = [str(value) for value in params.get("launchKeys", [])]
@@ -1688,16 +1824,21 @@ class NativeTrackerReader:
             ]
             missing_signals = list(missing_fields)
             if not (is_current is True or current_revision is not None):
-                missing_signals.append("revisionCurrentness")
+                missing_signals.append("revision-currentness")
             if evidence_required and missing_signals:
-                incomplete.append(
-                    {
-                        "itemId": item["id"],
-                        "issueKey": item.get("issueKey"),
-                        "missingFields": missing_fields,
-                        "missingLogicalSignals": sorted(missing_signals),
-                    }
-                )
+                incomplete_receipt = {
+                    "itemId": item["id"],
+                    "issueKey": item.get("issueKey"),
+                    "missingFields": missing_fields,
+                    "missingLogicalSignals": sorted(missing_signals),
+                }
+                if "revision-currentness" in missing_signals:
+                    incomplete_receipt["acceptedSources"] = accepted_logical_sources
+                    if fields.get("revisionCurrentness") is not None:
+                        incomplete_receipt["unacceptedFieldsPresent"] = [
+                            "revisionCurrentness"
+                        ]
+                incomplete.append(incomplete_receipt)
             if evidence_required:
                 validation_item_ids.add(item["id"])
                 for edge in [*ancestry_edges, *dependencies]:
@@ -1905,6 +2046,7 @@ class NativeTrackerReader:
             "evidenceMapping": {
                 "fingerprint": evidence_mapping_fingerprint,
                 "signals": sorted(evidence_mapping),
+                "acceptedLogicalSources": accepted_logical_sources,
             },
             "pagination": {"cursor": None, "truncated": False},
             "failOn": dict(query_echo.get("expanded", {}).get("failOn", {})),

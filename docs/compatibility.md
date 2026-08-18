@@ -2,9 +2,9 @@
 
 ## Validated release
 
-- Validation date: 2026-08-11
+- Validation date: 2026-08-17
 - Nimbalyst: 0.72.8 packaged build
-- Extension: Tracker+ 0.9.0
+- Extension: Tracker+ 0.9.1
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows

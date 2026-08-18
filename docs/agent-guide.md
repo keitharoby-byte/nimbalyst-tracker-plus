@@ -136,6 +136,14 @@ continuable without weakening the response cap. `includeArchived` and
 requested `timeline-link` records appear only in `edges`. Always inspect the
 validation and watermark blocks.
 
+Predicate validation is query-local. `query.validationScope` declares the
+selected-node, context-node, and relationship counts plus a deterministic
+fingerprint. A non-launch result is not affected by launch containers outside
+that scope. When a launch is selected, the scope carries the active membership
+context needed to validate its lifecycle; missing endpoints, invalid or
+duplicate relationships, membership cycles, and incomplete launch fields
+remain fail-closed.
+
 The watermark includes `schemaDiscovery` for `timeline-item`. State
 `missing-with-live-rows` means the rows remain readable but the current
 workspace has no matching schema registration. Treat the
@@ -433,7 +441,13 @@ a `qa-signed-off` tag while keeping default sources for every other signal:
 Mappings are validated and activated atomically. A missing required logical
 signal produces `DISPATCH_EVIDENCE_INCOMPLETE` with
 `incompleteEvidence[].missingLogicalSignals`, no candidates, and no launch
-totals. Detailed receipts expose every resolved evidence value and source;
+totals. Revision currentness is reported as the logical signal
+`revision-currentness`, not as a writable field. Its incomplete receipt lists
+the effective configured sources under `acceptedSources`; by default these are
+`currentRevision` equal to `packetRevision` or `isCurrentRevision=true`. A
+present `revisionCurrentness` near-name field is reported under
+`unacceptedFieldsPresent` and is never consumed. Detailed receipts expose every
+resolved evidence value and source;
 `query.evidenceMapping.fingerprint` and the effective registry hash change with
 the mapping. `includeUnscoped=true` with an empty
 `admittedUnscopedTypes` list is rejected as `UNSCOPED_WORK_NOT_CONFIGURED`.

@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.9.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.9.1 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,15 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.9.0
+## What's new in 0.9.1
+
+- Keep predicate and role-query validation local to returned rows and the
+  membership context needed by selected launches, with a deterministic scope
+  receipt.
+- Report accepted configured evidence sources when revision currentness is
+  unresolved, without accepting ambiguous near-name fields.
+
+## Previously in 0.9.0
 
 - Make `.nimbalyst/tracker-plus.queries.json` the exact saved-query inventory
   for each workspace; Tracker+ no longer injects default queries.

@@ -121,6 +121,103 @@ class QueryTraverseTests(unittest.TestCase):
         injection = self.reader.query_items({"workspacePath": self.workspace, "where": {"field": "title", "op": "eq", "value": "' OR 1=1 --"}})
         self.assertEqual(injection["page"]["totalCount"], 0)
 
+    def test_predicate_validation_is_query_local(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "unrelated-launch", "LAUNCH-UNRELATED", "launch", {
+                "title": "Unrelated incomplete launch",
+                "launchKey": "UNRELATED",
+                "status": "active",
+            })
+            connection.commit()
+
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "eq", "value": "PAGE-000"},
+        })
+
+        self.assertEqual([node["id"] for node in result["nodes"]], ["page-000"])
+        self.assertEqual(result["validation"]["state"], "pass")
+        scope = result["query"]["validationScope"]
+        self.assertEqual(scope["type"], "query-local")
+        self.assertEqual(scope["selectedNodeCount"], 1)
+        self.assertEqual(scope["contextNodeCount"], 0)
+        self.assertEqual(scope["relationshipCount"], 0)
+        self.assertEqual(len(scope["fingerprint"]), 64)
+
+        role_result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "role-active-work-and-attention",
+                "params": {"roleId": "coordinator"},
+            },
+        })
+        self.assertEqual(role_result["validation"]["state"], "pass")
+        self.assertNotIn(
+            "unrelated-launch",
+            {
+                item_id
+                for finding in role_result["validation"]["findings"]
+                for item_id in finding["itemIds"]
+            },
+        )
+
+    def test_selected_launch_validation_carries_membership_context(self) -> None:
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "eq", "value": "LAUNCH-RELEASE-A"},
+        })
+
+        self.assertEqual(result["validation"]["state"], "pass")
+        scope = result["query"]["validationScope"]
+        self.assertEqual(scope["type"], "query-local")
+        self.assertGreaterEqual(scope["contextNodeCount"], 2)
+        self.assertGreaterEqual(scope["relationshipCount"], 2)
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "selected-incomplete-launch", "LAUNCH-SELECTED-INCOMPLETE", "launch", {
+                "title": "Selected incomplete launch",
+                "launchKey": "SELECTED-INCOMPLETE",
+                "status": "active",
+            })
+            connection.commit()
+        incomplete = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {
+                "field": "issueKey",
+                "op": "eq",
+                "value": "LAUNCH-SELECTED-INCOMPLETE",
+            },
+        })
+        self.assertEqual(incomplete["validation"]["state"], "fail")
+        self.assertIn(
+            "launch-fields-incomplete",
+            {finding["code"] for finding in incomplete["validation"]["findings"]},
+        )
+
+    def test_selected_launch_duplicate_membership_remains_terminal(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._link(
+                connection,
+                "query-membership-duplicate",
+                "REL-QUERY-DUPLICATE",
+                "member-1",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "eq", "value": "LAUNCH-RELEASE-A"},
+        })
+
+        self.assertEqual(result["validation"]["state"], "fail")
+        self.assertIn(
+            "duplicate-active-membership",
+            {finding["code"] for finding in result["validation"]["findings"]},
+        )
+
     def test_saved_role_result_with_legacy_relationships_normalizes_without_crashing(self) -> None:
         with closing(sqlite3.connect(self.db_path)) as connection:
             self._insert(
@@ -1682,6 +1779,104 @@ class QueryTraverseTests(unittest.TestCase):
         missing = receipt["incompleteEvidence"][0]
         self.assertIn("qaStatus", missing["missingLogicalSignals"])
         self.assertNotIn("launchTotals", receipt)
+
+    def test_dispatch_currentness_diagnostic_names_configured_sources(self) -> None:
+        ready = {
+            "title": "Currentness diagnostic packet",
+            "status": "ready",
+            "packetRevision": "revision-1",
+            "qaEvidenceRevision": "revision-1",
+            "qaStatus": "passed",
+            "holdState": "clear",
+            "databaseRouteState": "approved",
+            "custodyState": "vacant",
+            "survivorState": "unique",
+            "collisionState": "clear",
+            "revisionCurrentness": "current",
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(
+                connection,
+                "dispatch-currentness",
+                "ITEM-DISPATCH-CURRENTNESS",
+                "task",
+                ready,
+            )
+            self._link(
+                connection,
+                "dispatch-currentness-membership",
+                "REL-DISPATCH-CURRENTNESS",
+                "dispatch-currentness",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        request = {
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        }
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph(request)
+        self.assertEqual(raised.exception.code, "DISPATCH_EVIDENCE_INCOMPLETE")
+        missing = raised.exception.details["receipt"]["incompleteEvidence"][0]
+        self.assertIn("revision-currentness", missing["missingLogicalSignals"])
+        self.assertEqual(missing["unacceptedFieldsPresent"], ["revisionCurrentness"])
+        sources = missing["acceptedSources"]["revision-currentness"]
+        self.assertEqual(
+            {(source["field"], source["type"], source["constraint"]) for source in sources},
+            {
+                ("currentRevision", "string", "equals packetRevision"),
+                ("isCurrentRevision", "boolean", "true"),
+            },
+        )
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            ready["currentRevision"] = "revision-1"
+            connection.execute(
+                "UPDATE tracker_items SET data=? WHERE id='dispatch-currentness'",
+                (json.dumps(ready),),
+            )
+            connection.commit()
+        string_result = self.reader.traverse_graph(request)
+        self.assertIn(
+            "dispatch-currentness",
+            {node["id"] for node in string_result["nodes"]},
+        )
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            ready.pop("currentRevision")
+            ready["isCurrentRevision"] = True
+            connection.execute(
+                "UPDATE tracker_items SET data=? WHERE id='dispatch-currentness'",
+                (json.dumps(ready),),
+            )
+            connection.commit()
+        boolean_result = self.reader.traverse_graph(request)
+        self.assertIn(
+            "dispatch-currentness",
+            {node["id"] for node in boolean_result["nodes"]},
+        )
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            ready["isCurrentRevision"] = False
+            ready["currentRevision"] = "revision-2"
+            connection.execute(
+                "UPDATE tracker_items SET data=? WHERE id='dispatch-currentness'",
+                (json.dumps(ready),),
+            )
+            connection.commit()
+        mismatch = self.reader.traverse_graph(request)
+        receipt = next(
+            receipt for receipt in mismatch["receipts"]
+            if receipt["itemId"] == "dispatch-currentness"
+        )
+        self.assertFalse(receipt["included"])
+        self.assertIn("packet-not-current-revision", receipt["exclusionReasons"])
 
     def test_dispatch_waiting_roots_require_explicit_policy_and_terminal_roots_stay_excluded(self) -> None:
         policy = json.loads(json.dumps(self.reader._registry["dispatchPolicy"]))

@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.1 - 2026-08-17
+
+- Scope predicate and role-query launch validation to the selected page plus
+  the membership context required by selected launches. Query receipts now
+  declare and fingerprint that validation scope, while genuine lifecycle,
+  endpoint, duplicate, cycle, and relationship defects remain fail-closed.
+  (#33)
+- Separate the revision-currentness logical signal from writable evidence
+  fields. Incomplete dispatch receipts now identify the effective configured
+  sources and constraints, flag a misleading near-name field as unaccepted,
+  and continue to accept only matching revision evidence or an explicit
+  current-revision boolean. (#32)
+
 ## 0.9.0 - 2026-08-11
 
 - Make `.nimbalyst/tracker-plus.queries.json` the complete authoritative saved-

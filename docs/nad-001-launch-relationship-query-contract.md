@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.9. This document describes only the
+Accepted; amended for Tracker+ 0.9.1. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -76,6 +76,15 @@ without partially changing the effective registry. The effective catalog
 contributes to `registryHash` and every result echoes the selected query ID,
 version, parameters, expanded definition, and query fingerprint.
 
+### Validation follows the declared projection scope
+
+Predicate validation is query-local. It evaluates the selected page and, when
+a launch is selected, the bounded membership and dependency context required
+to validate that launch. Containers outside that declared scope cannot create
+findings. Each query receipt declares scope counts, completeness, and a
+deterministic fingerprint. An incomplete scope or a genuine selected-graph
+defect remains fail-closed.
+
 ### Policy is installation-specific
 
 `.nimbalyst/tracker-plus.registry.json` may override terminal statuses, role
@@ -109,6 +118,11 @@ The `dispatch-eligible-work-v1` execution mode is a generic engine whose
 workflow values come from `dispatchPolicy`. It emits candidates only after
 revision-specific QA, scope, dependency, hold, route, custody, survivor, and
 collision evidence is complete and admissible.
+
+Revision currentness is a logical signal, not a writable field contract. The
+receipt derives its accepted sources from the effective registry and exposes
+their type and constraint. Similar-looking fields outside that mapping remain
+unaccepted; no implicit alias can weaken admission.
 
 Any warning, error, unresolved selected edge, incomplete evidence, topology
 cycle, or response truncation returns a terminal receipt with no candidates or
