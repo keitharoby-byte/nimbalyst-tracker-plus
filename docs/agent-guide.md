@@ -81,6 +81,14 @@ Arguments:
 Use the returned body and comments for context. Use `tracker_update` or
 `tracker_add_comment` for any durable response.
 
+The tracker body resolves from the collaborative tracker content when it is
+non-empty and otherwise falls back to the item's durable local body snapshot.
+`tracker.bodySource` reports which source served the body:
+`collaborative-content`, `local-snapshot`, or `empty`. A host-side write
+status is not authoritative for body presence — if a body write reported a
+collaborative-store failure, read the item back: a non-`empty` `bodySource`
+proves the body is durably readable, so do not duplicate it into comments.
+
 ## `native_tracker_list_comments`
 
 Use this when only comment history is needed or to continue pagination.

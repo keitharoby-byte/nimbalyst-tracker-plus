@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Resolve the tracker body in `native_tracker_get_with_comments` from the
+  collaborative tracker content when non-empty, falling back to the durable
+  local body snapshot so a lagging or unreconciled collaborative write never
+  reads as an empty body. The response now reports `tracker.bodySource`
+  (`collaborative-content`, `local-snapshot`, or `empty`) so readers can
+  distinguish a genuinely empty body from a snapshot-served one. (#34)
 - Document and regression-test that dispatch launch admission follows
   qualifying active ancestry (for example item → milestone → launch) within
   the bounded traversal depth, without requiring a duplicate direct

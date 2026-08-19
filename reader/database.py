@@ -99,9 +99,20 @@ class NativeTrackerReader:
             parsed["workspacePath"], parsed["trackerId"]
         )
         data = self._parse_data(row)
-        body = row["content"] if isinstance(row["content"], str) else data.get("description", "")
-        if not isinstance(body, str):
-            body = ""
+        # The collaborative content column can lag the write that produced it.
+        # An empty column with a durable local snapshot must not read as an
+        # empty body, so fall back and report which source served the body.
+        content = row["content"] if isinstance(row["content"], str) else ""
+        snapshot = data.get("description")
+        if content.strip():
+            body = content
+            body_source = "collaborative-content"
+        elif isinstance(snapshot, str) and snapshot.strip():
+            body = snapshot
+            body_source = "local-snapshot"
+        else:
+            body = content
+            body_source = "empty"
         bounded_body, body_truncated = self._truncate(body, MAX_TRACKER_BODY_CHARS)
 
         tracker = {
@@ -115,6 +126,7 @@ class NativeTrackerReader:
             "updated": self._optional_string(row["updated"]),
             "body": bounded_body,
             "bodyTruncated": body_truncated,
+            "bodySource": body_source,
         }
         result = {
             "tracker": tracker,

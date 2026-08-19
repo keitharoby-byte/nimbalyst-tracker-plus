@@ -181,6 +181,59 @@ class NativeTrackerReaderTests(unittest.TestCase):
         self.assertEqual(tracker["status"], "in-progress")
         self.assertEqual(tracker["body"], "Synthetic durable body")
         self.assertFalse(tracker["bodyTruncated"])
+        self.assertEqual(tracker["bodySource"], "collaborative-content")
+
+    def _set_body_columns(self, content: object, description: object) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            raw = connection.execute(
+                "SELECT data FROM tracker_items WHERE id = 'tracker-one'"
+            ).fetchone()[0]
+            data = json.loads(raw)
+            if description is None:
+                data.pop("description", None)
+            else:
+                data["description"] = description
+            connection.execute(
+                "UPDATE tracker_items SET content = ?, data = ? WHERE id = 'tracker-one'",
+                (content, json.dumps(data)),
+            )
+            connection.commit()
+
+    def test_get_falls_back_to_local_snapshot_when_collaborative_content_is_empty(self) -> None:
+        self._set_body_columns("", "Durable local snapshot body")
+
+        result = self.reader.get_with_comments(self._params())
+
+        tracker = result["tracker"]
+        self.assertEqual(tracker["body"], "Durable local snapshot body")
+        self.assertEqual(tracker["bodySource"], "local-snapshot")
+
+    def test_get_falls_back_to_local_snapshot_when_collaborative_content_is_null(self) -> None:
+        self._set_body_columns(None, "Durable local snapshot body")
+
+        result = self.reader.get_with_comments(self._params())
+
+        tracker = result["tracker"]
+        self.assertEqual(tracker["body"], "Durable local snapshot body")
+        self.assertEqual(tracker["bodySource"], "local-snapshot")
+
+    def test_get_reports_a_genuinely_empty_body_as_empty(self) -> None:
+        self._set_body_columns("", None)
+
+        result = self.reader.get_with_comments(self._params())
+
+        tracker = result["tracker"]
+        self.assertEqual(tracker["body"], "")
+        self.assertEqual(tracker["bodySource"], "empty")
+
+    def test_get_prefers_collaborative_content_over_snapshot(self) -> None:
+        self._set_body_columns("Collaborative body", "Stale local snapshot")
+
+        result = self.reader.get_with_comments(self._params())
+
+        tracker = result["tracker"]
+        self.assertEqual(tracker["body"], "Collaborative body")
+        self.assertEqual(tracker["bodySource"], "collaborative-content")
 
     def test_sql_shaped_tracker_id_is_only_a_value(self) -> None:
         with self.assertRaises(ReaderError) as raised:
