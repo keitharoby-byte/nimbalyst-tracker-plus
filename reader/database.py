@@ -193,6 +193,7 @@ class NativeTrackerReader:
                               AND (
                                 id IN ({placeholders})
                                 OR (type = 'milestone' AND archived = 0)
+                                OR (type = 'release' AND archived = 0)
                                 OR (type = 'timeline-item' AND archived = 0)
                               )
                             ORDER BY updated DESC, id ASC
@@ -212,7 +213,7 @@ class NativeTrackerReader:
                             WHERE workspace = ?
                               AND deleted_at IS NULL
                               AND archived = 0
-                              AND type IN ('milestone', 'timeline-item')
+                              AND type IN ('milestone', 'release', 'timeline-item')
                             ORDER BY updated DESC, id ASC
                             LIMIT ?
                             """,
@@ -1112,10 +1113,14 @@ class NativeTrackerReader:
                 raise ReaderError("ROOT_AMBIGUOUS", "A traversal root matched more than one item.", {"root": raw_root})
             resolved_roots.append(matches[0]["id"])
         resolved_roots = sorted(set(resolved_roots))
-        default_membership = any(items_by_id[root].get("primaryType") == "launch" for root in resolved_roots)
+        default_membership_types: list[str] = []
+        if any(items_by_id[root].get("primaryType") == "launch" for root in resolved_roots):
+            default_membership_types.append("part-of-launch")
+        if any(items_by_id[root].get("primaryType") in {"milestone", "release"} for root in resolved_roots):
+            default_membership_types.append("in-collection")
         membership_raw = expanded.get("membership")
-        if membership_raw is None and default_membership:
-            membership_raw = {"relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1}
+        if membership_raw is None and default_membership_types:
+            membership_raw = {"relationshipTypes": default_membership_types, "direction": "incoming", "status": ["active"], "maxDepth": 1}
         membership = validate_stage(membership_raw, "membership", self._registry, membership=True)
         expand = validate_stage(expanded.get("expand"), "expand", self._registry, membership=False)
 
@@ -2981,7 +2986,7 @@ class NativeTrackerReader:
         if primary_type not in type_tags:
             type_tags.insert(0, primary_type)
         due_date = self._date_string(
-            fields.get("targetDate") if primary_type == "milestone" else fields.get("dueDate")
+            fields.get("targetDate") if primary_type in {"milestone", "release"} else fields.get("dueDate")
         )
         if due_date is None:
             due_date = self._date_string(fields.get("deadline") or fields.get("targetDate"))
@@ -3244,18 +3249,23 @@ class NativeTrackerReader:
             for edge in edges
         }
 
-        legacy_specs = {
-            "blockers": ("depends-on", False, "hard-serial"),
-            "waitingOn": ("depends-on", False, "soft-coordination"),
-            "related": ("related", False, None),
-            "sourceItems": ("evidences", True, None),
-            "milestone": ("contributes-to", False, None),
-            "deliverables": ("contributes-to", True, None),
+        # Inline field synthesis: legacy fields plus the native built-in
+        # `collection` field (relationshipTypeKey `in-collection`, item →
+        # milestone/release container), which stores membership inline on
+        # each item rather than as a timeline-link row.
+        inline_specs = {
+            "blockers": ("depends-on", False, "hard-serial", True),
+            "waitingOn": ("depends-on", False, "soft-coordination", True),
+            "related": ("related", False, None, True),
+            "sourceItems": ("evidences", True, None, True),
+            "milestone": ("contributes-to", False, None, True),
+            "deliverables": ("contributes-to", True, None, True),
+            "collection": ("in-collection", False, None, False),
         }
         seen_symmetric: set[tuple[str, str, str]] = set()
         for item in items:
             fields = raw_fields_by_id[item["id"]]
-            for field, (relationship_type, reverse, hardness) in legacy_specs.items():
+            for field, (relationship_type, reverse, hardness, legacy) in inline_specs.items():
                 for target in self._relationship_targets(fields.get(field)):
                     source_id, target_id = (
                         (target["itemId"], item["id"])
@@ -3280,9 +3290,10 @@ class NativeTrackerReader:
                     target_item = items_by_id.get(target_id)
                     source_item = items_by_id.get(source_id)
                     stable_seed = f"{source_id}|{relationship_type}|{target_id}"
+                    id_prefix = "legacy" if legacy else "native"
                     edges.append(
                         {
-                            "id": f"legacy-{hashlib.sha256(stable_seed.encode('utf-8')).hexdigest()[:20]}",
+                            "id": f"{id_prefix}-{hashlib.sha256(stable_seed.encode('utf-8')).hexdigest()[:20]}",
                             "issueKey": None,
                             "sourceId": source_id,
                             "sourceIssueKey": source_item.get("issueKey") if source_item else None,
@@ -3309,7 +3320,7 @@ class NativeTrackerReader:
                             "created": None,
                             "updated": item.get("updated"),
                             "targetInSnapshot": target_id in items_by_id,
-                            "legacy": True,
+                            "legacy": legacy,
                         }
                     )
         return edges, findings

@@ -180,7 +180,13 @@ defines `dispatch-eligible-work-v1`, `launch-scope`, `launch-hard-blockers`,
 `launch-unscheduled-executable-work`. A direct call
 accepts `roots` (1–8 issue keys, launch keys, or IDs), optional `membership`
 and `expand` stages, an optional predicate `nodeWhere`, bounded `limits`, and
-`failOn.truncation` / `failOn.validation`. Membership nodes are returned in
+`failOn.truncation` / `failOn.validation`. When `membership` is omitted,
+container roots receive a default depth-one active incoming membership stage:
+`part-of-launch` for `launch` roots and `in-collection` for `milestone` and
+`release` roots (combined when roots mix container types). `release` is a
+first-class collection container on par with `milestone`; item→container
+placement made through the native inline `collection` field traverses as
+`in-collection` edges. Membership nodes are returned in
 `nodes`; external one-hop context is returned in `boundaryNodes` and excluded
 from rollups. `launch-scope` fails closed on truncation or validation errors.
 The traversal watermark carries the same `schemaDiscovery` receipt as queries.
@@ -747,9 +753,18 @@ fields use the internal item ID returned by native tracker tools.
 }
 ```
 
-Supported relationship types are `part-of-launch`, `governs`,
-`contributes-to`, `reviews`, `evidences`, `depends-on`, `precedes`, `enables`,
-`coordinates-with`, `implements`, and `related`.
+Supported relationship types are `part-of-launch`, `in-collection`,
+`has-item`, `governs`, `contributes-to`, `reviews`, `evidences`, `depends-on`,
+`precedes`, `enables`, `coordinates-with`, `implements`, and `related`.
+
+`in-collection` and its inverse `has-item` mirror the native built-in
+`collection` field (item → `milestone` or `release` container). Collection
+membership is normally stored inline on each item through that field — the
+reader synthesizes a native, non-legacy `in-collection` edge from it
+automatically — so prefer the inline field and reserve explicit
+`timeline-link` rows of these types for cases the inline field cannot
+express. Neither type carries `scopeRole`, `contributionRole`, or
+`hardness`, and neither blocks.
 
 Additional controls:
 
@@ -774,6 +789,9 @@ Rules agents must preserve:
 - Clear or supersede an existing edge instead of creating inverse truth.
 - `part-of-launch` is member → launch, must be active to create membership,
   requires `scopeRole`, and cannot carry `hardness` or `contributionRole`.
+- `in-collection` is item → container (`milestone` or `release`); use the
+  native inline `collection` field for it whenever possible instead of a
+  `timeline-link` row.
 - `scopeRole` and milestone `contributionRole` are separate semantics.
 
 ## Timeline view filters

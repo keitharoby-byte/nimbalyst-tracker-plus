@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Register the native `in-collection` / `has-item` relationship types
+  (registry version 5) so collection membership traverses with the same
+  parity as `part-of-launch`, synthesize native non-legacy `in-collection`
+  edges from the built-in inline `collection` field, and treat `release` as
+  a first-class collection container: release rows surface in timeline
+  snapshots with `targetDate` parity, and `milestone` / `release` traversal
+  roots default to depth-one active incoming `in-collection` membership. (#35)
 - Resolve the tracker body in `native_tracker_get_with_comments` from the
   collaborative tracker content when non-empty, falling back to the durable
   local body snapshot so a lagging or unreconciled collaborative write never

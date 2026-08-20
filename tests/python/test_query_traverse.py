@@ -813,6 +813,55 @@ class QueryTraverseTests(unittest.TestCase):
             # edges, so the schema must keep a home for it (issue #2 drift guard).
             self.assertIn("name: clearingCondition", schema_text)
 
+    # --- Issue #35: native collection membership + release containers ---
+
+    def _insert_release_collection_fixture(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "release-1", "REL-CONTAINER", "release", {"title": "Release 1.0", "status": "active", "targetDate": "2026-09-01"})
+            self._insert(connection, "coll-task", "ITEM-COLL", "task", {"title": "Collected work", "status": "open", "collection": {"itemId": "release-1"}})
+            self._insert(connection, "coll-task-m", "ITEM-COLL-M", "task", {"title": "Milestone-collected work", "status": "open", "collection": {"itemId": "prior"}})
+            connection.commit()
+
+    def test_inline_collection_field_synthesizes_native_in_collection_edges(self) -> None:
+        self._insert_release_collection_fixture()
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["ITEM-COLL"],
+            "expand": {"relationshipTypes": ["in-collection"], "direction": "outgoing", "maxDepth": 1},
+        })
+        edges = [edge for edge in result["edges"] if edge["relationshipType"] == "in-collection"]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertEqual((edge["sourceId"], edge["targetId"]), ("coll-task", "release-1"))
+        self.assertFalse(edge["legacy"])
+        self.assertTrue(edge["id"].startswith("native-"))
+
+    def test_release_and_milestone_roots_default_to_in_collection_membership(self) -> None:
+        self._insert_release_collection_fixture()
+        release_walk = self.reader.traverse_graph({"workspacePath": self.workspace, "roots": ["REL-CONTAINER"]})
+        self.assertIn("coll-task", {node["id"] for node in release_walk["nodes"]})
+        self.assertIn("release-1", {node["id"] for node in release_walk["nodes"]})
+        milestone_walk = self.reader.traverse_graph({"workspacePath": self.workspace, "roots": ["M-ALPHA"]})
+        self.assertIn("coll-task-m", {node["id"] for node in milestone_walk["nodes"]})
+
+    def test_release_containers_surface_in_timeline_snapshot(self) -> None:
+        self._insert_release_collection_fixture()
+        snapshot = self.reader.timeline_snapshot({"workspacePath": self.workspace, "includeUnscheduled": True, "maxItems": 300})
+        release = next(item for item in snapshot["items"] if item["id"] == "release-1")
+        self.assertEqual(release["primaryType"], "release")
+        self.assertEqual(release["dueDate"], "2026-09-01")
+
+    def test_explicit_in_collection_timeline_link_validates(self) -> None:
+        self._insert_release_collection_fixture()
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._link(connection, "link-coll", "REL-COLL", "member-1", "release-1", "in-collection")
+            connection.commit()
+        snapshot = self.reader.timeline_snapshot({"workspacePath": self.workspace, "includeUnscheduled": True, "maxItems": 300})
+        self.assertNotIn("link-coll", [rel for finding in snapshot["validation"] if finding["code"] == "invalid-relationship-type" for rel in finding["relationshipIds"]])
+        edge = next(edge for edge in snapshot["relationships"] if edge["id"] == "link-coll")
+        self.assertEqual(edge["relationshipType"], "in-collection")
+        self.assertEqual(edge["state"], "active")
+
     # --- Issue #3: composable role inbox + bounded traversal ---
 
     def test_role_query_matches_owner_or_attention_and_excludes_terminal(self) -> None:

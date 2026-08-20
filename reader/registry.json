@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "terminalStatuses": ["done", "completed", "achieved", "closed", "shipped", "implemented", "released", "cancelled", "retired"],
   "scopeRoles": ["core", "supporting", "acceptance", "review", "evidence", "dependency-only"],
   "executableTypes": ["task", "timeline-item", "devops-item", "automation", "mr", "merge-request", "pull-request", "change-request"],
@@ -35,6 +35,8 @@
   },
   "relationshipTypes": {
     "part-of-launch": { "membership": true, "canBlock": false, "requiresScopeRole": true, "forbidsHardness": true },
+    "in-collection": { "membership": true, "canBlock": false },
+    "has-item": { "membership": true, "canBlock": false },
     "governs": { "membership": false, "canBlock": false },
     "contributes-to": { "membership": false, "canBlock": false },
     "reviews": { "membership": false, "canBlock": "exit-criteria" },

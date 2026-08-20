@@ -56,6 +56,12 @@ fields:
       - value: part-of-launch
         label: Part of launch
         color: '#14b8a6'
+      - value: in-collection
+        label: In collection
+        color: '#0d9488'
+      - value: has-item
+        label: Has item
+        color: '#2dd4bf'
       - value: governs
         label: Governs
         color: '#0f766e'

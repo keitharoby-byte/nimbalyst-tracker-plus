@@ -30,6 +30,8 @@ const EXECUTABLE_TYPES = new Set([
 ]);
 const RELATIONSHIP_TYPES = new Set<RelationshipType>([
   'part-of-launch',
+  'in-collection',
+  'has-item',
   'governs',
   'depends-on',
   'contributes-to',
@@ -57,6 +59,8 @@ const HARDNESS_LEVELS = new Set<RelationshipHardness>(['hard-serial', 'shared-re
 
 export const RELATIONSHIP_LABELS: Record<RelationshipType, { forward: string; inverse: string }> = {
   'part-of-launch': { forward: 'Part of launch', inverse: 'Contains launch member' },
+  'in-collection': { forward: 'In collection', inverse: 'Has item' },
+  'has-item': { forward: 'Has item', inverse: 'In collection' },
   governs: { forward: 'Governs', inverse: 'Is governed by' },
   'depends-on': { forward: 'Depends on', inverse: 'Is predecessor of' },
   'contributes-to': { forward: 'Contributes to', inverse: 'Receives contribution from' },

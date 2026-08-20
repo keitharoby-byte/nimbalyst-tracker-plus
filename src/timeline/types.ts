@@ -6,6 +6,8 @@ export type ExecutionConstraint = 'clear' | 'waiting' | 'blocked' | 'paused';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type RelationshipType =
   | 'part-of-launch'
+  | 'in-collection'
+  | 'has-item'
   | 'governs'
   | 'depends-on'
   | 'contributes-to'

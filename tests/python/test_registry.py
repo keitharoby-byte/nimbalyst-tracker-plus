@@ -28,7 +28,7 @@ class RegistryTests(unittest.TestCase):
             ).hexdigest(),
             "extensionVersion": "9.9.9",
             "adapterVersion": 3,
-            "registryVersion": 4,
+            "registryVersion": 5,
             "files": files,
         }
         (directory / "bundle-manifest.json").write_text(
@@ -42,7 +42,7 @@ class RegistryTests(unittest.TestCase):
             root = Path(directory)
             manifest = self._bundle_fixture(root)
             registry, diagnostics = _load_bundle_from(root, require_manifest=True)
-            self.assertEqual(registry["version"], 4)
+            self.assertEqual(registry["version"], 5)
             self.assertEqual(registry["savedQueries"], {})
             self.assertEqual(diagnostics["verificationState"], "verified")
             self.assertEqual(diagnostics["extensionVersion"], "9.9.9")
@@ -64,7 +64,7 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(error.code, "READER_RESTART_REQUIRED")
             self.assertEqual(error.details["extensionVersion"], "9.9.9")
             self.assertEqual(error.details["adapterVersion"], 3)
-            self.assertEqual(error.details["registryVersion"], 4)
+            self.assertEqual(error.details["registryVersion"], 5)
             self.assertTrue(error.details["assetPath"].endswith("saved-queries.json"))
             self.assertEqual(len(error.details["expectedHash"]), 64)
             self.assertEqual(len(error.details["actualHash"]), 64)
