@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Stop reporting live, non-archived items outside a predicate query's
+  bounded validation scope as `orphan-endpoint` errors. Endpoint
+  availability is now resolved against the complete live workspace: an
+  out-of-selection live endpoint is boundary context (counted in
+  `query.validationScope.boundaryEndpointCount`) while deleted, unresolved,
+  or archived endpoints still fail closed as `orphan-endpoint`. Role/inbox
+  queries no longer flip to validation `fail` because returned rows
+  reference containers outside the role-scoped selection. (#36)
+- Trim oversized graph responses against a margined budget so page
+  continuation metadata appended after trimming can no longer push a
+  just-under-limit response over the safe response cap.
 - Register the native `in-collection` / `has-item` relationship types
   (registry version 5) so collection membership traverses with the same
   parity as `part-of-launch`, synthesize native non-legacy `in-collection`

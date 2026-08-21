@@ -813,6 +813,86 @@ class QueryTraverseTests(unittest.TestCase):
             # edges, so the schema must keep a home for it (issue #2 drift guard).
             self.assertIn("name: clearingCondition", schema_text)
 
+    # --- Issue #36: live out-of-selection endpoints are boundary, not orphan ---
+
+    def _orphan_findings(self, result: dict[str, object]) -> list[dict[str, object]]:
+        return [
+            finding for finding in result["validation"]["findings"]
+            if finding["code"] == "orphan-endpoint"
+        ]
+
+    def test_live_out_of_selection_collection_target_is_boundary_not_orphan(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "release-live", "REL-LIVE", "release", {"title": "Live release", "status": "active"})
+            self._insert(connection, "coll-source", "ITEM-B36", "task", {"title": "Collected role work", "status": "open", "owner": "coordinator", "collection": {"itemId": "release-live"}})
+            connection.commit()
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "eq", "value": "ITEM-B36"},
+        })
+        self.assertEqual([node["id"] for node in result["nodes"]], ["coll-source"])
+        self.assertEqual(self._orphan_findings(result), [])
+        self.assertEqual(result["validation"]["state"], "pass")
+        self.assertEqual(result["query"]["validationScope"]["boundaryEndpointCount"], 1)
+
+    def test_role_query_with_cross_scope_collection_targets_stays_authoritative(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "release-live", "REL-LIVE", "release", {"title": "Live release", "status": "active"})
+            self._insert(connection, "coll-role-1", "ITEM-B36A", "task", {"title": "Role work one", "status": "open", "owner": "coordinator", "collection": {"itemId": "release-live"}})
+            self._insert(connection, "coll-role-2", "ITEM-B36B", "task", {"title": "Role work two", "status": "open", "owner": "coordinator", "collection": {"itemId": "prior"}})
+            connection.commit()
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "savedQuery": {"id": "role-active-work-and-attention", "params": {"roleId": "coordinator"}},
+        })
+        returned = {node["id"] for node in result["nodes"]}
+        self.assertLessEqual({"coll-role-1", "coll-role-2"}, returned)
+        self.assertEqual(self._orphan_findings(result), [])
+        self.assertEqual(result["validation"]["state"], "pass")
+
+    def test_live_out_of_selection_legacy_edge_endpoints_are_not_orphans(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "legacy-source", "ITEM-B36L", "task", {
+                "title": "Legacy-linked work", "status": "open",
+                "milestone": {"itemId": "prior"},
+                "deliverables": [{"itemId": "alpha-seed"}],
+            })
+            connection.commit()
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "eq", "value": "ITEM-B36L"},
+        })
+        self.assertEqual(self._orphan_findings(result), [])
+        self.assertEqual(result["validation"]["state"], "pass")
+
+    def test_unresolved_endpoint_still_fails_closed_as_orphan(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "ghost-source", "ITEM-B36G", "task", {"title": "Ghost-collected work", "status": "open", "collection": {"itemId": "no-such-item"}})
+            connection.commit()
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "eq", "value": "ITEM-B36G"},
+        })
+        orphans = self._orphan_findings(result)
+        self.assertEqual(len(orphans), 1)
+        self.assertEqual(orphans[0]["itemIds"], ["no-such-item"])
+        self.assertEqual(result["validation"]["state"], "fail")
+
+    def test_archived_endpoint_still_fails_closed_as_orphan(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "archived-release", "REL-ARCH", "release", {"title": "Archived release", "status": "active"})
+            connection.execute("UPDATE tracker_items SET archived = 1 WHERE id = 'archived-release'")
+            self._insert(connection, "arch-source", "ITEM-B36X", "task", {"title": "Archived-collected work", "status": "open", "collection": {"itemId": "archived-release"}})
+            connection.commit()
+        result = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "eq", "value": "ITEM-B36X"},
+        })
+        orphans = self._orphan_findings(result)
+        self.assertEqual(len(orphans), 1)
+        self.assertEqual(orphans[0]["itemIds"], ["archived-release"])
+        self.assertEqual(result["validation"]["state"], "fail")
+
     # --- Issue #35: native collection membership + release containers ---
 
     def _insert_release_collection_fixture(self) -> None:

@@ -145,12 +145,19 @@ requested `timeline-link` records appear only in `edges`. Always inspect the
 validation and watermark blocks.
 
 Predicate validation is query-local. `query.validationScope` declares the
-selected-node, context-node, and relationship counts plus a deterministic
-fingerprint. A non-launch result is not affected by launch containers outside
-that scope. When a launch is selected, the scope carries the active membership
-context needed to validate its lifecycle; missing endpoints, invalid or
-duplicate relationships, membership cycles, and incomplete launch fields
-remain fail-closed.
+selected-node, context-node, relationship, and boundary-endpoint counts plus a
+deterministic fingerprint. A non-launch result is not affected by launch
+containers outside that scope. When a launch is selected, the scope carries
+the active membership context needed to validate its lifecycle; unresolved
+endpoints, invalid or duplicate relationships, membership cycles, and
+incomplete launch fields remain fail-closed.
+
+Endpoint availability is judged against the complete live workspace, not the
+bounded scope: a relationship whose other endpoint resolves to a live,
+non-archived item outside the current selection is boundary context, counted
+in `validationScope.boundaryEndpointCount`, and never raises
+`orphan-endpoint`. Only endpoints that resolve to no live item — deleted,
+unresolved, or archived — fail closed as `orphan-endpoint` errors.
 
 The watermark includes `schemaDiscovery` for `timeline-item`. State
 `missing-with-live-rows` means the rows remain readable but the current

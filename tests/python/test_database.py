@@ -226,6 +226,40 @@ class NativeTrackerReaderTests(unittest.TestCase):
         self.assertEqual(tracker["body"], "")
         self.assertEqual(tracker["bodySource"], "empty")
 
+    def test_get_falls_back_when_collaborative_content_is_whitespace_only(self) -> None:
+        self._set_body_columns("   \n\t  ", "Durable local snapshot body")
+
+        result = self.reader.get_with_comments(self._params())
+
+        tracker = result["tracker"]
+        self.assertEqual(tracker["body"], "Durable local snapshot body")
+        self.assertEqual(tracker["bodySource"], "local-snapshot")
+
+    def test_get_treats_non_string_snapshot_as_empty(self) -> None:
+        self._set_body_columns("", {"rich": "unexpected structured snapshot"})
+
+        result = self.reader.get_with_comments(self._params())
+
+        tracker = result["tracker"]
+        self.assertEqual(tracker["body"], "")
+        self.assertEqual(tracker["bodySource"], "empty")
+
+    def test_body_fallback_parity_across_item_types(self) -> None:
+        for item_type in ("bug", "question", "task", "plan"):
+            with self.subTest(item_type=item_type):
+                self._set_body_columns("", f"Snapshot body for {item_type}")
+                with closing(sqlite3.connect(self.db_path)) as connection:
+                    connection.execute(
+                        "UPDATE tracker_items SET type = ? WHERE id = 'tracker-one'",
+                        (item_type,),
+                    )
+                    connection.commit()
+                result = self.reader.get_with_comments(self._params())
+                tracker = result["tracker"]
+                self.assertEqual(tracker["primaryType"], item_type)
+                self.assertEqual(tracker["body"], f"Snapshot body for {item_type}")
+                self.assertEqual(tracker["bodySource"], "local-snapshot")
+
     def test_get_prefers_collaborative_content_over_snapshot(self) -> None:
         self._set_body_columns("Collaborative body", "Stale local snapshot")
 

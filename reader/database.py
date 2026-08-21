@@ -882,14 +882,23 @@ class NativeTrackerReader:
                 node["launchRollup"] = rollups[node["id"]]
                 node["progress"] = rollups[node["id"]]["derivedProgress"]
         scoped_item_ids = {item["id"] for item in validation_items}
+        # Endpoint availability is judged against the complete live workspace,
+        # not the bounded query-local scope: an endpoint that resolves to a
+        # live, non-archived item outside the selection is boundary context,
+        # not an orphan. Only endpoints that resolve to no live item (deleted,
+        # unresolved, or archived) fail closed as orphan-endpoint. (#36)
         endpoint_findings: list[dict[str, Any]] = []
+        boundary_endpoint_ids: set[str] = set()
         for edge in validation_edges:
-            missing_endpoint_ids = sorted({
+            out_of_scope_ids = sorted({
                 endpoint_id
                 for endpoint_id in (edge["sourceId"], edge["targetId"])
                 if endpoint_id not in scoped_item_ids
             })
-            for endpoint_id in missing_endpoint_ids:
+            for endpoint_id in out_of_scope_ids:
+                if endpoint_id in validation_item_by_id:
+                    boundary_endpoint_ids.add(endpoint_id)
+                    continue
                 endpoint_findings.append(self._finding(
                     "orphan-endpoint",
                     "error",
@@ -927,6 +936,7 @@ class NativeTrackerReader:
             "selectedNodeCount": len(selected_node_ids),
             "contextNodeCount": len(validation_node_ids - selected_node_ids),
             "relationshipCount": len(validation_link_ids),
+            "boundaryEndpointCount": len(boundary_endpoint_ids),
             "complete": validation_scope_complete,
             "fingerprint": self._stable_fingerprint(validation_scope_payload),
         }
@@ -4290,7 +4300,11 @@ class NativeTrackerReader:
     def _fit_graph_result(self, result: dict[str, Any], sort: list[dict[str, str]] | None = None) -> dict[str, Any]:
         removed = False
         findings_trimmed = False
-        while self._json_size(result) > MAX_RESULT_BYTES and (result["boundaryNodes"] or result["nodes"] or result["edges"] or result["validation"]["findings"]):
+        # Trim against a margined budget: page continuation metadata and the
+        # findings-truncated marker are appended after trimming, so trimming to
+        # the exact limit can leave the final payload just over it.
+        trim_budget = MAX_RESULT_BYTES - 512
+        while self._json_size(result) > trim_budget and (result["boundaryNodes"] or result["nodes"] or result["edges"] or result["validation"]["findings"]):
             removed = True
             if result["boundaryNodes"]:
                 result["boundaryNodes"].pop()
