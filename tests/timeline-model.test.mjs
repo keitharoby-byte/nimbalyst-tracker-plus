@@ -11,6 +11,7 @@ import {
   orderByPrimaryMilestone,
   parseTimelineDocument,
   pullRequestReference,
+  deliveryReferences,
   trackerReferenceHref,
 } from '../src/timeline/model.ts';
 
@@ -40,6 +41,23 @@ test('completion and schedule filters compose and pull request references stay s
     number: 42,
     url: 'https://github.com/example/repo/pull/42',
   });
+  assert.deepEqual(deliveryReferences({
+    ...document.snapshot.items[3],
+    deliveryAttribution: {
+      authority: 'cross-repo-body',
+      state: 'attributed',
+      references: [
+        { repository: 'example/library', number: 6, url: 'https://github.com/example/library/pull/6' },
+        { repository: 'example/library', number: 8, url: 'https://github.com/example/library/pull/8' },
+      ],
+      validation: [],
+      evidenceSource: 'collaborative-content',
+      receiptId: 'a'.repeat(64),
+    },
+  }), [
+    { repository: 'example/library', number: 6, url: 'https://github.com/example/library/pull/6' },
+    { repository: 'example/library', number: 8, url: 'https://github.com/example/library/pull/8' },
+  ]);
   assert.deepEqual(pullRequestReference({ ...document.snapshot.items[3], pullRequestNumber: 7, pullRequestUrl: 'javascript:alert(1)' }), {
     number: 7,
     url: null,

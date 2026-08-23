@@ -304,6 +304,122 @@ class NativeTrackerReaderTests(unittest.TestCase):
         self.assertEqual(number, 73)
         self.assertEqual(url, "https://github.com/example/repo/pull/73")
 
+    def test_native_pull_request_fields_remain_delivery_authority(self) -> None:
+        fields = {
+            "pullRequestNumber": 42,
+            "pullRequestUrl": "https://github.com/example/application/pull/42",
+            "title": "Unrelated key in diagnostic text",
+            "tags": ["another-key", "delivery"],
+        }
+        row = {
+            "content": "Cross-repo delivery: example/library#6 and PR #8",
+        }
+
+        receipt = self.reader._delivery_attribution(
+            row,
+            fields,
+            ["task"],
+            42,
+            "https://github.com/example/application/pull/42",
+        )
+
+        self.assertEqual(receipt["authority"], "native-fields")
+        self.assertEqual(receipt["state"], "attributed")
+        self.assertEqual(receipt["references"], [{
+            "repository": "example/application",
+            "number": 42,
+            "url": "https://github.com/example/application/pull/42",
+        }])
+        self.assertEqual(receipt["validation"], [])
+
+    def test_leading_cross_repo_delivery_preserves_multiple_prs_deterministically(self) -> None:
+        row = {
+            "content": "Cross-repo delivery: example/library PR #8 and PR #6\n\nDetails follow.",
+        }
+
+        first = self.reader._delivery_attribution(row, {}, ["task"], None, None)
+        second = self.reader._delivery_attribution(row, {}, ["task"], None, None)
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["authority"], "cross-repo-body")
+        self.assertEqual(first["state"], "attributed")
+        self.assertEqual(first["evidenceSource"], "collaborative-content")
+        self.assertEqual(first["references"], [
+            {
+                "repository": "example/library",
+                "number": 6,
+                "url": "https://github.com/example/library/pull/6",
+            },
+            {
+                "repository": "example/library",
+                "number": 8,
+                "url": "https://github.com/example/library/pull/8",
+            },
+        ])
+        self.assertRegex(first["receiptId"], r"^[a-f0-9]{64}$")
+
+    def test_cross_repo_delivery_declarations_fail_closed(self) -> None:
+        cases = (
+            ("No delivery declaration.", "unattributed", None),
+            ("Cross-repo delivery: PR #6", "invalid", "cross-repo-delivery-malformed"),
+            (
+                "Cross-repo delivery: example/library#6, example/library#6",
+                "invalid",
+                "cross-repo-delivery-ambiguous",
+            ),
+            (
+                "Context first.\nCross-repo delivery: example/library#6",
+                "invalid",
+                "cross-repo-delivery-not-leading",
+            ),
+            ("Delivery: example/library#6", "unattributed", None),
+        )
+        for body, expected_state, expected_code in cases:
+            with self.subTest(body=body):
+                receipt = self.reader._delivery_attribution(
+                    {"content": body}, {}, ["task"], None, None
+                )
+                self.assertEqual(receipt["state"], expected_state)
+                self.assertEqual(receipt["references"], [])
+                codes = [finding["code"] for finding in receipt["validation"]]
+                self.assertEqual(codes, [expected_code] if expected_code else [])
+
+    def test_body_delivery_attribution_does_not_change_rollups(self) -> None:
+        self._insert_timeline_items()
+        before = self.reader.timeline_snapshot(
+            {
+                "workspacePath": "C:\\Workspace\\One",
+                "includeUnscheduled": True,
+                "maxItems": 100,
+            }
+        )
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            raw = connection.execute(
+                "SELECT data FROM tracker_items WHERE id = 'tracker-one'"
+            ).fetchone()[0]
+            data = json.loads(raw)
+            data["description"] = "Cross-repo delivery: example/library#6 and PR #8"
+            connection.execute(
+                "UPDATE tracker_items SET content = '', data = ? WHERE id = 'tracker-one'",
+                (json.dumps(data),),
+            )
+            connection.commit()
+
+        after = self.reader.timeline_snapshot(
+            {
+                "workspacePath": "C:\\Workspace\\One",
+                "includeUnscheduled": True,
+                "maxItems": 100,
+            }
+        )
+        before_item = next(item for item in before["items"] if item["id"] == "tracker-one")
+        after_item = next(item for item in after["items"] if item["id"] == "tracker-one")
+        for field in ("workflow", "progress", "walkStage", "buildState", "readiness"):
+            self.assertEqual(after_item[field], before_item[field])
+        self.assertEqual(after["milestones"], before["milestones"])
+        self.assertEqual(after_item["deliveryAttribution"]["state"], "attributed")
+        self.assertEqual(after_item["deliveryAttribution"]["evidenceSource"], "local-snapshot")
+
     def test_timeline_snapshot_projects_normalized_relationships_and_dimensions(self) -> None:
         self._insert_timeline_items()
 

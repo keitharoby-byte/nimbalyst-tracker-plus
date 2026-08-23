@@ -27,7 +27,7 @@ class RegistryTests(unittest.TestCase):
                 json.dumps(files, sort_keys=True).encode("utf-8")
             ).hexdigest(),
             "extensionVersion": "9.9.9",
-            "adapterVersion": 3,
+            "adapterVersion": 4,
             "registryVersion": 5,
             "files": files,
         }
@@ -46,7 +46,7 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(registry["savedQueries"], {})
             self.assertEqual(diagnostics["verificationState"], "verified")
             self.assertEqual(diagnostics["extensionVersion"], "9.9.9")
-            self.assertEqual(diagnostics["adapterVersion"], 3)
+            self.assertEqual(diagnostics["adapterVersion"], 4)
             self.assertEqual(diagnostics["generationId"], manifest["generationId"])
             self.assertEqual(
                 set(diagnostics["assetHashes"]),
@@ -63,7 +63,7 @@ class RegistryTests(unittest.TestCase):
             error = raised.exception
             self.assertEqual(error.code, "READER_RESTART_REQUIRED")
             self.assertEqual(error.details["extensionVersion"], "9.9.9")
-            self.assertEqual(error.details["adapterVersion"], 3)
+            self.assertEqual(error.details["adapterVersion"], 4)
             self.assertEqual(error.details["registryVersion"], 5)
             self.assertTrue(error.details["assetPath"].endswith("saved-queries.json"))
             self.assertEqual(len(error.details["expectedHash"]), 64)

@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.9.1 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.10.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,27 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.9.1
+## What's new in 0.10.0
+
+Tracker+ now derives governed cross-repository delivery attribution when an
+item has no native pull-request fields. The first non-empty body line must use
+the exact label and a repository-qualified declaration:
+
+```text
+Cross-repo delivery: example/library PR #6 and PR #8
+```
+
+The projection emits a deterministic `deliveryAttribution` receipt with its
+authority, evidence source, validation findings, receipt ID, and every PR's
+repository, number, and canonical URL. Native `pullRequestNumber` and
+`pullRequestUrl` remain authoritative. Unlabeled, non-leading, malformed, or
+ambiguous text never becomes attribution evidence, and attribution does not
+change workflow, readiness, progress, or milestone rollups. (#38)
+
+This release also includes the query endpoint-liveness fix, native collection
+and release support, and durable body fallback completed after 0.9.1.
+
+## Previously in 0.9.1
 
 - Keep predicate and role-query validation local to returned rows and the
   membership context needed by selected launches, with a deterministic scope

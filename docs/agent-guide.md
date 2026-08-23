@@ -730,6 +730,27 @@ still displayed when no URL exists. Imported items tagged as pull requests can
 also derive both values from a native `github://owner/repository#number`
 origin URN.
 
+When all native pull-request fields are absent, a tracker item may declare
+cross-repository delivery on its first non-empty body line:
+
+```text
+Cross-repo delivery: example/library PR #6 and PR #8
+```
+
+Each first reference must name `owner/repository`; later `PR #number`
+references inherit the immediately preceding repository. Fully qualified
+`https://github.com/owner/repository/pull/number` references are also accepted.
+The declaration is one line. Duplicate references, unsupported prose,
+multiple declarations, and declarations after other body content fail closed.
+Titles, tags, issue-key matches, comments, and commit text remain diagnostic
+only. They are never delivery authority.
+
+Timeline items expose the derived result as `deliveryAttribution` with
+`authority`, `state`, ordered `references[]`, bounded `validation[]`,
+`evidenceSource`, and a deterministic `receiptId`. Native fields suppress body
+fallback even when malformed. The receipt is projection evidence only and
+does not participate in workflow, readiness, progress, or milestone rollups.
+
 The inspector uses a safely encoded Nimbalyst tracker-reference link. Select it
 to open the live tracker item. Agents should use the projected reference rather
 than constructing or guessing a `nimbalyst://` URL themselves.

@@ -229,6 +229,21 @@ export function pullRequestReference(item: TimelineItem): { number: number | nul
   return { number, url: safeUrl };
 }
 
+export function deliveryReferences(item: TimelineItem): Array<{ repository: string | null; number: number | null; url: string | null }> {
+  const derived = item.deliveryAttribution?.references ?? [];
+  if (derived.length) {
+    return derived.map((reference) => ({
+      repository: reference.repository,
+      number: reference.number,
+      url: safeHttpsUrl(reference.url),
+    }));
+  }
+  const legacy = pullRequestReference(item);
+  return legacy.number != null || legacy.url != null
+    ? [{ repository: null, ...legacy }]
+    : [];
+}
+
 export function effectiveDeliverableProgress(item: TimelineItem): number {
   if (isComplete(item)) return 100;
   if (typeof item.progress !== 'number' || !Number.isFinite(item.progress)) return 0;
@@ -444,8 +459,37 @@ function parseItem(raw: unknown): TimelineItem | null {
     isCritical: raw.isCritical === true,
     pullRequestNumber: positiveInteger(raw.pullRequestNumber) ?? pullRequestNumberFromUrl(stringValue(raw.pullRequestUrl)),
     pullRequestUrl: stringValue(raw.pullRequestUrl),
+    deliveryAttribution: parseDeliveryAttribution(raw.deliveryAttribution),
     updated: stringValue(raw.updated),
   };
+}
+
+function parseDeliveryAttribution(raw: unknown): TimelineItem['deliveryAttribution'] | undefined {
+  if (!isRecord(raw)) return undefined;
+  const authority = enumValue(raw.authority, new Set(['native-fields', 'cross-repo-body', 'none'] as const));
+  const state = enumValue(raw.state, new Set(['attributed', 'invalid', 'unattributed'] as const));
+  const receiptId = stringValue(raw.receiptId);
+  if (!authority || !state || !receiptId || !Array.isArray(raw.references) || !Array.isArray(raw.validation)) return undefined;
+  const references = raw.references.flatMap((value) => {
+    if (!isRecord(value)) return [];
+    const number = positiveInteger(value.number);
+    const url = safeHttpsUrl(stringValue(value.url));
+    const repository = stringValue(value.repository);
+    if (number == null && url == null) return [];
+    return [{ repository, number, url }];
+  });
+  const validation = raw.validation.flatMap((value) => {
+    if (!isRecord(value)) return [];
+    const code = stringValue(value.code);
+    const message = stringValue(value.message);
+    if (!code || !message || value.severity !== 'warning') return [];
+    return [{ code, severity: 'warning' as const, message }];
+  });
+  const evidenceSource = enumValue(
+    raw.evidenceSource,
+    new Set(['collaborative-content', 'local-snapshot', 'empty'] as const),
+  ) ?? null;
+  return { authority, state, references, validation, evidenceSource, receiptId };
 }
 
 function parseRelationship(raw: unknown): TimelineRelationship | null {

@@ -67,6 +67,22 @@ export interface TimelineItem {
   isCritical: boolean;
   pullRequestNumber?: number | null;
   pullRequestUrl?: string | null;
+  deliveryAttribution?: {
+    authority: 'native-fields' | 'cross-repo-body' | 'none';
+    state: 'attributed' | 'invalid' | 'unattributed';
+    references: Array<{
+      repository: string | null;
+      number: number | null;
+      url: string | null;
+    }>;
+    validation: Array<{
+      code: string;
+      severity: 'warning';
+      message: string;
+    }>;
+    evidenceSource: 'collaborative-content' | 'local-snapshot' | 'empty' | null;
+    receiptId: string;
+  };
   updated?: string | null;
 }
 

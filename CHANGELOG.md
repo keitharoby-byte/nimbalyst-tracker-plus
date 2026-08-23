@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.10.0 - 2026-08-23
+
+- Add fail-closed cross-repository delivery attribution from an exact leading
+  `Cross-repo delivery` body declaration only when native pull-request fields
+  are absent. Derived receipts preserve repository-qualified one-to-many PR
+  references, validation, body evidence source, and deterministic identity;
+  diagnostic title/tag/key/commit text remains non-authoritative and delivery
+  evidence cannot change workflow, readiness, progress, or milestone rollups.
+  (#38)
+
 - Stop reporting live, non-archived items outside a predicate query's
   bounded validation scope as `orphan-endpoint` errors. Endpoint
   availability is now resolved against the complete live workspace: an

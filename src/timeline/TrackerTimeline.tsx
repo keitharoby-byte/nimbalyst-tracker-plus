@@ -18,6 +18,7 @@ import {
   parseTimelineDocument,
   primaryMilestoneParentIds,
   pullRequestReference,
+  deliveryReferences,
   relationshipLabel,
 } from './model';
 import type {
@@ -592,6 +593,7 @@ function ItemDetails({ item, relationships, items, onSelect, onClose }: {
 }) {
   const itemsById = useMemo(() => new Map(items.map((entry) => [entry.id, entry])), [items]);
   const pullRequest = pullRequestReference(item);
+  const delivery = deliveryReferences(item);
   const incidentRelationships = relationships
     .filter((edge) => edge.sourceId === item.id || edge.targetId === item.id)
     .map((edge) => ({ edge, inverse: edge.targetId === item.id }))
@@ -628,10 +630,15 @@ function ItemDetails({ item, relationships, items, onSelect, onClose }: {
         <div><dt>Critical-path slack</dt><dd>{item.criticalPathSlackDays == null ? 'N/A' : `${item.criticalPathSlackDays}d`}</dd></div>
       </dl>
       <section className="nt-pull-request" aria-label="Pull request reference">
-        <div><span>Pull request</span><strong>{pullRequest.number ? `#${pullRequest.number}` : 'Not referenced'}</strong></div>
-        {pullRequest.url
-          ? <a href={pullRequest.url} target="_blank" rel="noreferrer noopener">Open pull request ↗</a>
-          : <small>{pullRequest.number ? 'No GitHub URL is stored for this PR.' : 'Set pullRequestNumber or pullRequestUrl on the tracker item.'}</small>}
+        <div><span>Delivery</span><strong>{delivery.length ? `${delivery.length} pull request${delivery.length === 1 ? '' : 's'}` : 'Not referenced'}</strong></div>
+        {delivery.map((reference, index) => reference.url
+          ? <a key={`${reference.repository ?? 'native'}:${reference.number ?? index}`} href={reference.url} target="_blank" rel="noreferrer noopener">
+              {reference.repository ? `${reference.repository} ` : ''}{reference.number ? `#${reference.number}` : 'Open pull request'} ↗
+            </a>
+          : <small key={`${reference.repository ?? 'native'}:${reference.number ?? index}`}>
+              {reference.repository ? `${reference.repository} ` : ''}{reference.number ? `#${reference.number}` : 'Reference unavailable'} — no HTTPS URL stored.
+            </small>)}
+        {!delivery.length && <small>{pullRequest.number ? 'No GitHub URL is stored for this PR.' : 'Set native PR fields or a governed leading cross-repo declaration.'}</small>}
       </section>
       {item.scheduleHealthReasons.length > 0 && <ReasonList title="Schedule rationale" entries={item.scheduleHealthReasons} />}
       {item.riskReasons.length > 0 && <ReasonList title="Risk rationale" entries={item.riskReasons} />}

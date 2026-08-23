@@ -99,20 +99,7 @@ class NativeTrackerReader:
             parsed["workspacePath"], parsed["trackerId"]
         )
         data = self._parse_data(row)
-        # The collaborative content column can lag the write that produced it.
-        # An empty column with a durable local snapshot must not read as an
-        # empty body, so fall back and report which source served the body.
-        content = row["content"] if isinstance(row["content"], str) else ""
-        snapshot = data.get("description")
-        if content.strip():
-            body = content
-            body_source = "collaborative-content"
-        elif isinstance(snapshot, str) and snapshot.strip():
-            body = snapshot
-            body_source = "local-snapshot"
-        else:
-            body = content
-            body_source = "empty"
+        body, body_source = self._resolved_body(row, data)
         bounded_body, body_truncated = self._truncate(body, MAX_TRACKER_BODY_CHARS)
 
         tracker = {
@@ -2883,6 +2870,21 @@ class NativeTrackerReader:
                 fields.setdefault(key, value)
         return fields
 
+    @staticmethod
+    def _resolved_body(
+        row: Mapping[str, Any],
+        fields: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        # Collaborative content can lag its durable local snapshot. Keep one
+        # resolution rule for direct reads and derived projection evidence.
+        content = row["content"] if isinstance(row["content"], str) else ""
+        snapshot = fields.get("description")
+        if content.strip():
+            return content, "collaborative-content"
+        if isinstance(snapshot, str) and snapshot.strip():
+            return snapshot, "local-snapshot"
+        return content, "empty"
+
     @classmethod
     def _pull_request_fields(
         cls,
@@ -2941,6 +2943,181 @@ class NativeTrackerReader:
                 number = number or int(match.group(3))
                 url = url or f"https://github.com/{match.group(1)}/{match.group(2)}/pull/{match.group(3)}"
         return number, url
+
+    @classmethod
+    def _has_native_pull_request_fields(
+        cls,
+        fields: Mapping[str, Any],
+        type_tags: list[str],
+    ) -> bool:
+        nested = fields.get("pullRequest")
+        nested_fields = nested if isinstance(nested, Mapping) else {}
+        candidates = (
+            fields.get("pullRequestNumber"),
+            fields.get("pullRequestUrl"),
+            fields.get("prNumber"),
+            fields.get("prUrl"),
+            fields.get("githubPullRequestNumber"),
+            fields.get("githubPullRequestUrl"),
+            nested_fields.get("number"),
+            nested_fields.get("url"),
+        )
+        if any(value is not None for value in candidates):
+            return True
+        origin = fields.get("origin")
+        origin_fields = origin if isinstance(origin, Mapping) else {}
+        external = origin_fields.get("external")
+        external_fields = external if isinstance(external, Mapping) else {}
+        normalized_tags = {str(value).lower() for value in type_tags}
+        return bool(
+            normalized_tags.intersection({"mr", "merge-request", "pull-request", "change-request"})
+            and external_fields.get("urn") is not None
+        )
+
+    @staticmethod
+    def _github_repository_from_url(url: str | None) -> str | None:
+        match = re.fullmatch(
+            r"https://github\.com/([A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99})/pull/\d+(?:[/?#].*)?",
+            url or "",
+            re.IGNORECASE,
+        )
+        return match.group(1) if match else None
+
+    @classmethod
+    def _cross_repo_delivery_references(
+        cls,
+        body: str,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        label = re.compile(r"^\s*Cross-repo delivery\s*:\s*(.*?)\s*$", re.IGNORECASE)
+        lines = body.splitlines()
+        first_nonempty = next((index for index, line in enumerate(lines) if line.strip()), None)
+        labeled_lines = [index for index, line in enumerate(lines) if label.fullmatch(line)]
+        if not labeled_lines:
+            return [], []
+        if first_nonempty is None or labeled_lines[0] != first_nonempty:
+            return [], [{
+                "code": "cross-repo-delivery-not-leading",
+                "severity": "warning",
+                "message": "Cross-repo delivery evidence was ignored because its declaration is not the leading body line.",
+            }]
+        if len(labeled_lines) != 1:
+            return [], [{
+                "code": "cross-repo-delivery-ambiguous",
+                "severity": "warning",
+                "message": "Cross-repo delivery evidence was ignored because the body contains multiple declarations.",
+            }]
+
+        declaration = label.fullmatch(lines[first_nonempty]).group(1).strip()  # type: ignore[union-attr]
+        if not declaration:
+            return [], [{
+                "code": "cross-repo-delivery-malformed",
+                "severity": "warning",
+                "message": "Cross-repo delivery evidence was ignored because the leading declaration is empty or malformed.",
+            }]
+
+        full_reference = re.compile(
+            r"(?:https://github\.com/)?"
+            r"(?P<repository>[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99})"
+            r"(?:/pull/|\s+PR\s+#?|#)(?P<number>\d{1,9})"
+            r"(?:[/?#][^\s,;]*)?",
+            re.IGNORECASE,
+        )
+        shorthand = re.compile(r"PR\s+#?(?P<number>\d{1,9})", re.IGNORECASE)
+        separator = re.compile(r"\s*(?:,|;|\band\b)\s*", re.IGNORECASE)
+        position = 0
+        repository: str | None = None
+        references: list[dict[str, Any]] = []
+        seen: set[tuple[str, int]] = set()
+        while position < len(declaration):
+            match = full_reference.match(declaration, position)
+            if match:
+                repository = match.group("repository")
+                number = int(match.group("number"))
+            else:
+                match = shorthand.match(declaration, position)
+                if not match or repository is None:
+                    return [], [{
+                        "code": "cross-repo-delivery-malformed",
+                        "severity": "warning",
+                        "message": "Cross-repo delivery evidence was ignored because every reference was not repository-qualified.",
+                    }]
+                number = int(match.group("number"))
+            identity = (repository.lower(), number)
+            if identity in seen:
+                return [], [{
+                    "code": "cross-repo-delivery-ambiguous",
+                    "severity": "warning",
+                    "message": "Cross-repo delivery evidence was ignored because it repeats the same pull request.",
+                }]
+            seen.add(identity)
+            references.append({
+                "repository": repository,
+                "number": number,
+                "url": f"https://github.com/{repository}/pull/{number}",
+            })
+            position = match.end()
+            if position == len(declaration):
+                break
+            delimiter = separator.match(declaration, position)
+            if not delimiter or delimiter.end() == position:
+                return [], [{
+                    "code": "cross-repo-delivery-malformed",
+                    "severity": "warning",
+                    "message": "Cross-repo delivery evidence was ignored because the declaration contains unsupported text.",
+                }]
+            position = delimiter.end()
+
+        references.sort(key=lambda item: (str(item["repository"]).lower(), int(item["number"])))
+        return references, []
+
+    @classmethod
+    def _delivery_attribution(
+        cls,
+        row: Mapping[str, Any],
+        fields: Mapping[str, Any],
+        type_tags: list[str],
+        pull_request_number: int | None,
+        pull_request_url: str | None,
+    ) -> dict[str, Any]:
+        native_present = cls._has_native_pull_request_fields(fields, type_tags)
+        validation: list[dict[str, str]] = []
+        references: list[dict[str, Any]] = []
+        authority = "none"
+        evidence_source: str | None = None
+
+        if native_present:
+            authority = "native-fields"
+            if pull_request_number is not None or pull_request_url is not None:
+                references.append({
+                    "repository": cls._github_repository_from_url(pull_request_url),
+                    "number": pull_request_number,
+                    "url": pull_request_url,
+                })
+            else:
+                validation.append({
+                    "code": "native-delivery-reference-invalid",
+                    "severity": "warning",
+                    "message": "Native pull-request fields are present but do not contain a valid reference; body evidence was not considered.",
+                })
+        else:
+            body, body_source = cls._resolved_body(row, fields)
+            references, validation = cls._cross_repo_delivery_references(body)
+            if references or validation:
+                authority = "cross-repo-body"
+                evidence_source = body_source
+
+        state = "attributed" if references else "invalid" if validation else "unattributed"
+        receipt_basis = {
+            "authority": authority,
+            "state": state,
+            "references": references,
+            "validation": validation,
+            "evidenceSource": evidence_source,
+        }
+        receipt_id = hashlib.sha256(
+            json.dumps(receipt_basis, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return {**receipt_basis, "receiptId": receipt_id}
 
     def _is_complete(self, item: Mapping[str, Any]) -> bool:
         return str(item.get("workflow", "")).lower() in {
@@ -3025,6 +3202,13 @@ class NativeTrackerReader:
             duration_days = max(1, round((due_ms - start_ms) / 86_400_000) + 1)
         launch_scope = self._bounded_string(fields.get("launchScope"), 40)
         pull_request_number, pull_request_url = self._pull_request_fields(fields, type_tags)
+        delivery_attribution = self._delivery_attribution(
+            row,
+            fields,
+            type_tags,
+            pull_request_number,
+            pull_request_url,
+        )
         stored_walk_stage = self._bounded_string(fields.get("walkStage"), 40)
         walk_stage = (
             stored_walk_stage
@@ -3131,6 +3315,7 @@ class NativeTrackerReader:
             "isCritical": False,
             "pullRequestNumber": pull_request_number,
             "pullRequestUrl": pull_request_url,
+            "deliveryAttribution": delivery_attribution,
             "updated": self._date_time_string(row["updated"]),
         }
 
