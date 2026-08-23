@@ -24,13 +24,35 @@
       }
     },
     "dispatch-eligible-work-v1": {
-      "version": 1,
+      "version": 2,
       "kind": "traversal",
       "params": [],
-      "optionalParams": ["roleId", "launchKeys", "includeUnscoped"],
+      "optionalParams": ["roleId", "rootKeys", "launchKeys", "includeUnscoped"],
       "label": "Fail-closed dispatch candidates across eligible launches",
       "definition": {
         "mode": "dispatch-eligible-work-v1",
+        "scopePolicy": {
+          "version": 1,
+          "rootTypes": ["launch", "milestone"],
+          "implicitRootSelection": "all-eligible",
+          "ancestryDepth": 4,
+          "mechanisms": [
+            {
+              "id": "launch-membership",
+              "relationshipType": "part-of-launch",
+              "direction": "outgoing",
+              "authority": "authoritative",
+              "scopeRoles": ["core"]
+            },
+            {
+              "id": "milestone-contribution",
+              "relationshipType": "contributes-to",
+              "direction": "outgoing",
+              "authority": "authoritative",
+              "contributionRoles": ["primary"]
+            }
+          ]
+        },
         "failOn": {
           "truncation": true,
           "validation": true,

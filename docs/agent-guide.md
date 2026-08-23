@@ -351,12 +351,12 @@ Copy-paste dispatch and launch queries:
 ### Dispatch eligibility contract
 
 `dispatch-eligible-work-v1` inspects native `task` and `bug` rows by default.
-Optional `launchKeys` accepts 1–8 unique launch keys, `roleId` uses the role
-catalog's owner aliases or configured attention tags, and `includeUnscoped` is
-effective only for tracker types listed in
-`dispatchPolicy.admittedUnscopedTypes`. Omitting `launchKeys` considers all
-current launches admitted by policy; attention tags route a row to a role but
-do not infer launch scope.
+Optional `rootKeys` accepts 1–8 unique stable IDs, issue keys, or root keys.
+`launchKeys` remains a mutually exclusive compatibility alias. `roleId` uses
+the role catalog's owner aliases or configured attention tags, and
+`includeUnscoped` is effective only for tracker types listed in
+`dispatchPolicy.admittedUnscopedTypes`. Attention tags route a row to a role
+but do not infer scope.
 
 Potentially eligible rows resolve `packetRevision`, currentness,
 `qaEvidenceRevision`, `qaStatus`, `holdState`, `databaseRouteState`,
@@ -367,21 +367,47 @@ QA evidence must match the packet revision. Optional `pullRequestCustody`,
 interpreted as identity. `failureState` and `supersededBy`, when present, can
 only exclude a packet.
 
-Scope comes only from active primary/core normalized relationships:
-`part-of-launch.scopeRole` and
-`contributes-to.contributionRole`. Launch admission follows qualifying
-ancestry up to the bounded traversal depth: an item placed under an
-intermediate milestone or review container whose own qualifying relationship
-reaches a selected launch is admitted to that launch's scope. A direct
-item-to-launch relationship remains supported but is never required in
-addition to a qualifying transitive path — no duplicate direct placement is
-needed. Supporting, review, evidence, retired, or otherwise non-qualifying
-relationships never establish scope at any hop. Receipts include launch,
-milestone, and train ancestry plus the stable native relationship IDs used to
-prove it, with each hop's relationship reported on its own ancestry row.
+Scope comes from the saved query's optional versioned `scopePolicy`. When it is
+absent, the compatibility default selects launch and milestone roots through
+active outgoing `part-of-launch` core membership or `contributes-to` primary
+contribution relationships. A policy can instead declare neutral root types,
+implicit root behavior, ancestry depth, relationship direction, role filters,
+and authoritative or fallback mechanisms. Fallback paths are considered only
+when no authoritative path reaches a selected root.
+
+```json
+{
+  "scopePolicy": {
+    "version": 1,
+    "rootTypes": ["release"],
+    "implicitRootSelection": "require-explicit",
+    "ancestryDepth": 4,
+    "mechanisms": [
+      {
+        "id": "current-collection",
+        "relationshipType": "in-collection",
+        "direction": "outgoing",
+        "authority": "authoritative"
+      },
+      {
+        "id": "historical-launch",
+        "relationshipType": "part-of-launch",
+        "direction": "outgoing",
+        "authority": "fallback",
+        "scopeRoles": ["core"]
+      }
+    ]
+  }
+}
+```
+
+Admission follows qualifying ancestry up to the configured depth, so a direct
+item-to-root relationship is not required when a valid transitive path exists.
 Retired, archived, filtered, and out-of-boundary relationships are excluded
-before duplicate validation. Parallel relationships remain distinct when
-their scope or contribution role differs.
+before duplicate validation. Receipts identify the resolved native roots,
+policy fingerprint, mechanism IDs, authority, and stable relationship IDs for
+every ancestry hop. Root display-key changes do not change the fingerprint
+when native IDs and policy remain unchanged.
 
 Selected launch roots are lifecycle-validated against their actual active
 `part-of-launch` graph before candidate admission. That validation graph is
@@ -404,7 +430,7 @@ Every successful result includes:
 - `candidateCount`, source `inspectedCount`, `detailedReceiptCount`,
   `preAdmissionExcludedCount`, truncation, resolved roots, boundary rules,
   schema/registry provenance, watermark, and `queryFingerprint`;
-- per-launch totals, only after all fail-closed checks pass.
+- per-root totals, only after all fail-closed checks pass.
 
 Any warning, error, unresolved selected edge, evidence gap, ordering cycle, or
 truncation returns a terminal structured error. Its receipt always contains
@@ -578,6 +604,13 @@ relationship types, scope roles, executable types, caps, or registry version.
 - `DISPATCH_EVIDENCE_INCOMPLETE`: a potentially eligible packet lacks required
   revision, QA, hold, route, custody, survivor, or collision evidence. The
   terminal receipt exposes missing fields but no candidates or totals.
+- `DISPATCH_SCOPE_CONFIG_INVALID`: the configured scope policy is malformed,
+  references unsupported values, or declares overlapping mechanisms. Details
+  include the exact configuration path.
+- `DISPATCH_SCOPE_AMBIGUOUS`: one relationship matches more than one configured
+  scope mechanism, so authority cannot be resolved uniquely.
+- `DISPATCH_ROOTS_REQUIRED`: the effective policy requires explicit `rootKeys`
+  or compatible `launchKeys`, but neither was supplied.
 - `UNRESOLVED_EDGE`: a selected relationship endpoint is unavailable.
 - `registry-override-invalid`: the workspace override was ignored; this is a
   validation finding rather than a replacement for the bundled registry.

@@ -36,6 +36,176 @@ DATA_FIELDS = {
     "executionConstraint", "startDate", "dueDate", "targetDate", "forecastDate", "actualDate",
 }
 ROLE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+SCOPE_MECHANISM_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def _bounded_string_list(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and len(value) <= 16
+        and all(isinstance(entry, str) and 0 < len(entry.strip()) <= 100 for entry in value)
+        and len({entry.strip().casefold() for entry in value}) == len(value)
+    )
+
+
+def resolve_dispatch_scope_policy(
+    definition: Mapping[str, Any],
+    registry: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate and normalize externally managed dispatch scope semantics."""
+    configured = definition.get("scopePolicy")
+    dispatch_policy = registry["dispatchPolicy"]
+    if configured is None:
+        return {
+            "version": 1,
+            "source": "built-in-default",
+            "rootTypes": ["launch", "milestone"],
+            "implicitRootSelection": "all-eligible",
+            "ancestryDepth": registry["caps"]["traverseDepthMax"],
+            "mechanisms": [
+                {
+                    "id": "launch-membership",
+                    "relationshipType": "part-of-launch",
+                    "direction": "outgoing",
+                    "authority": "authoritative",
+                    "scopeRoles": list(dispatch_policy["membershipRoles"]),
+                },
+                {
+                    "id": "milestone-contribution",
+                    "relationshipType": "contributes-to",
+                    "direction": "outgoing",
+                    "authority": "authoritative",
+                    "contributionRoles": list(dispatch_policy["contributionRoles"]),
+                },
+            ],
+        }
+
+    expected_keys = {
+        "version", "rootTypes", "implicitRootSelection", "ancestryDepth", "mechanisms",
+    }
+    if not isinstance(configured, Mapping) or set(configured) != expected_keys:
+        raise ReaderError(
+            "DISPATCH_SCOPE_CONFIG_INVALID",
+            "scopePolicy must contain version, rootTypes, implicitRootSelection, ancestryDepth, and mechanisms.",
+            {"path": "definition.scopePolicy"},
+        )
+    root_types = configured.get("rootTypes")
+    if (
+        configured.get("version") != 1
+        or not isinstance(root_types, list)
+        or not 1 <= len(root_types) <= registry["caps"]["traverseRootsMax"]
+        or not all(isinstance(value, str) and 0 < len(value.strip()) <= 64 for value in root_types)
+        or len({value.strip().casefold() for value in root_types}) != len(root_types)
+        or any(value.strip().casefold() == "timeline-link" for value in root_types)
+    ):
+        raise ReaderError(
+            "DISPATCH_SCOPE_CONFIG_INVALID",
+            "scopePolicy rootTypes must be a bounded unique list of non-relationship item types.",
+            {"path": "definition.scopePolicy.rootTypes"},
+        )
+    implicit = configured.get("implicitRootSelection")
+    if implicit not in {"all-eligible", "require-explicit"}:
+        raise ReaderError(
+            "DISPATCH_SCOPE_CONFIG_INVALID",
+            "scopePolicy implicitRootSelection must be all-eligible or require-explicit.",
+            {"path": "definition.scopePolicy.implicitRootSelection"},
+        )
+    depth = configured.get("ancestryDepth")
+    if (
+        isinstance(depth, bool)
+        or not isinstance(depth, int)
+        or not 1 <= depth <= registry["caps"]["traverseDepthMax"]
+    ):
+        raise ReaderError(
+            "DISPATCH_SCOPE_CONFIG_INVALID",
+            "scopePolicy ancestryDepth exceeds the bounded traversal depth.",
+            {"path": "definition.scopePolicy.ancestryDepth"},
+        )
+    mechanisms = configured.get("mechanisms")
+    if not isinstance(mechanisms, list) or not 1 <= len(mechanisms) <= 8:
+        raise ReaderError(
+            "DISPATCH_SCOPE_CONFIG_INVALID",
+            "scopePolicy mechanisms must be a bounded non-empty array.",
+            {"path": "definition.scopePolicy.mechanisms"},
+        )
+    normalized_mechanisms: list[dict[str, Any]] = []
+    mechanism_ids: set[str] = set()
+    mechanism_routes: set[tuple[str, str]] = set()
+    registered_relationships = set(registry["relationshipTypes"])
+    registered_scope_roles = set(registry["scopeRoles"])
+    registered_contribution_roles = set(dispatch_policy["contributionRoles"])
+    for index, mechanism in enumerate(mechanisms):
+        path = f"definition.scopePolicy.mechanisms[{index}]"
+        if not isinstance(mechanism, Mapping):
+            raise ReaderError("DISPATCH_SCOPE_CONFIG_INVALID", "A scope mechanism is not an object.", {"path": path})
+        required = {"id", "relationshipType", "direction", "authority"}
+        optional = {"scopeRoles", "contributionRoles"}
+        if not required.issubset(mechanism) or set(mechanism) - required - optional:
+            raise ReaderError("DISPATCH_SCOPE_CONFIG_INVALID", "A scope mechanism has missing or unknown fields.", {"path": path})
+        mechanism_id = mechanism.get("id")
+        relationship_type = mechanism.get("relationshipType")
+        direction = mechanism.get("direction")
+        authority = mechanism.get("authority")
+        scope_roles = mechanism.get("scopeRoles")
+        contribution_roles = mechanism.get("contributionRoles")
+        route = (str(relationship_type), str(direction))
+        if (
+            not isinstance(mechanism_id, str)
+            or not SCOPE_MECHANISM_ID.fullmatch(mechanism_id)
+            or mechanism_id in mechanism_ids
+            or relationship_type not in registered_relationships
+            or direction not in {"outgoing", "incoming"}
+            or authority not in {"authoritative", "fallback"}
+            or route in mechanism_routes
+            or (scope_roles is not None and contribution_roles is not None)
+            or (
+                scope_roles is not None
+                and (
+                    not _bounded_string_list(scope_roles)
+                    or not set(scope_roles).issubset(registered_scope_roles)
+                )
+            )
+            or (
+                contribution_roles is not None
+                and (
+                    not _bounded_string_list(contribution_roles)
+                    or not set(contribution_roles).issubset(registered_contribution_roles)
+                )
+            )
+        ):
+            raise ReaderError(
+                "DISPATCH_SCOPE_CONFIG_INVALID",
+                "A scope mechanism is invalid or overlaps another mechanism route.",
+                {"path": path},
+            )
+        mechanism_ids.add(mechanism_id)
+        mechanism_routes.add(route)
+        normalized = {
+            "id": mechanism_id,
+            "relationshipType": relationship_type,
+            "direction": direction,
+            "authority": authority,
+        }
+        if scope_roles is not None:
+            normalized["scopeRoles"] = list(scope_roles)
+        if contribution_roles is not None:
+            normalized["contributionRoles"] = list(contribution_roles)
+        normalized_mechanisms.append(normalized)
+    if not any(value["authority"] == "authoritative" for value in normalized_mechanisms):
+        raise ReaderError(
+            "DISPATCH_SCOPE_CONFIG_INVALID",
+            "scopePolicy requires at least one authoritative mechanism.",
+            {"path": "definition.scopePolicy.mechanisms"},
+        )
+    return {
+        "version": 1,
+        "source": "workspace-query",
+        "rootTypes": [value.strip() for value in root_types],
+        "implicitRootSelection": implicit,
+        "ancestryDepth": depth,
+        "mechanisms": normalized_mechanisms,
+    }
 
 
 def expand_saved_query(saved: Any, registry: Mapping[str, Any], expected_kind: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -61,16 +231,16 @@ def expand_saved_query(saved: Any, registry: Mapping[str, Any], expected_kind: s
         if name not in params:
             continue
         value = params.get(name)
-        if name == "launchKeys":
+        if name in {"launchKeys", "rootKeys"}:
             if (
                 not isinstance(value, list)
                 or not 1 <= len(value) <= registry["caps"]["traverseRootsMax"]
                 or not all(isinstance(entry, str) and entry.strip() and len(entry.strip()) <= 100 for entry in value)
             ):
-                raise ReaderError("SAVED_QUERY_PARAMS_INVALID", "launchKeys must be a bounded non-empty string array.")
+                raise ReaderError("SAVED_QUERY_PARAMS_INVALID", f"{name} must be a bounded non-empty string array.")
             normalized = [entry.strip() for entry in value]
             if len({entry.casefold() for entry in normalized}) != len(normalized):
-                raise ReaderError("SAVED_QUERY_PARAMS_INVALID", "launchKeys must not contain duplicates.")
+                raise ReaderError("SAVED_QUERY_PARAMS_INVALID", f"{name} must not contain duplicates.")
             clean[name] = normalized
             continue
         if name == "includeUnscoped":

@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.10.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.11.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,21 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.10.0
+## What's new in 0.11.0
+
+Dispatch scope is now an external saved-query policy instead of a fixed
+launch-only interpretation. A workspace can select neutral root types, choose
+whether roots are implicit or required, configure bounded relationship
+mechanisms and directions, and distinguish authoritative membership from
+historical fallback evidence. Defaults remain compatible with existing launch
+and milestone catalogs when no scope policy is supplied.
+
+Dispatch receipts identify the effective policy, selected roots, mechanism IDs,
+authority level, and stable policy fingerprint. Invalid or overlapping policy
+definitions fail closed, and scope fingerprints remain stable when a root's
+display key changes but its native ID does not. (#39)
+
+## Previously in 0.10.0
 
 Tracker+ now derives governed cross-repository delivery attribution when an
 item has no native pull-request fields. The first non-empty body line must use

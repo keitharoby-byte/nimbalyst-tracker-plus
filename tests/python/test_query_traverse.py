@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from reader.contracts import ReaderError
 from reader.database import NativeTrackerReader
+from reader.query import resolve_dispatch_scope_policy
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -78,6 +79,33 @@ class QueryTraverseTests(unittest.TestCase):
     def _write_registry_override(self, payload: dict[str, object]) -> None:
         path = Path(self.workspace) / ".nimbalyst" / "tracker-plus.registry.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def _write_dispatch_scope_policy(self, scope_policy: dict[str, object]) -> None:
+        path = Path(self.workspace) / ".nimbalyst" / "tracker-plus.queries.json"
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+        query = catalog["queries"]["dispatch-eligible-work-v1"]
+        query["version"] = 2
+        if "rootKeys" not in query["optionalParams"]:
+            query["optionalParams"].append("rootKeys")
+        query["definition"]["scopePolicy"] = scope_policy
+        path.write_text(json.dumps(catalog), encoding="utf-8")
+
+    @staticmethod
+    def _ready_dispatch_fields() -> dict[str, object]:
+        return {
+            "title": "Ready packet",
+            "status": "ready",
+            "packetRevision": "revision-1",
+            "currentRevision": "revision-1",
+            "qaEvidenceRevision": "revision-1",
+            "qaStatus": "passed",
+            "holdState": "clear",
+            "databaseRouteState": "approved",
+            "custodyState": "clear",
+            "survivorState": "unique",
+            "collisionState": "clear",
+            "executionConstraint": "clear",
+        }
 
     def _mapped_dispatch_override(self) -> dict[str, object]:
         policy = json.loads(json.dumps(self.reader._registry["dispatchPolicy"]))
@@ -1498,6 +1526,194 @@ class QueryTraverseTests(unittest.TestCase):
             {edge["id"] for edge in first["edges"]},
         )
         self.assertEqual(first["validation"]["state"], "pass")
+
+    def test_dispatch_scope_policy_migrates_authority_to_collection_membership(self) -> None:
+        self._write_dispatch_scope_policy({
+            "version": 1,
+            "rootTypes": ["release"],
+            "implicitRootSelection": "all-eligible",
+            "ancestryDepth": 3,
+            "mechanisms": [{
+                "id": "release-membership",
+                "relationshipType": "in-collection",
+                "direction": "outgoing",
+                "authority": "authoritative",
+            }],
+        })
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "release-root", "ROOT-OLD", "release", {
+                "title": "Current delivery collection",
+                "status": "active",
+                "targetDate": "2026-09-01",
+            })
+            self._insert(
+                connection,
+                "collection-packet",
+                "PACKET-1",
+                "task",
+                self._ready_dispatch_fields(),
+            )
+            self._link(
+                connection,
+                "current-membership",
+                "REL-CURRENT",
+                "collection-packet",
+                "release-root",
+                "in-collection",
+            )
+            self._link(
+                connection,
+                "historical-membership",
+                "REL-HISTORICAL",
+                "collection-packet",
+                "launch-1",
+                "part-of-launch",
+                scope_role="core",
+            )
+            connection.commit()
+
+        request = {
+            "workspacePath": self.workspace,
+            "savedQuery": {"id": "dispatch-eligible-work-v1", "params": {}},
+        }
+
+        first = self.reader.traverse_graph(request)
+        receipt = next(
+            value for value in first["receipts"]
+            if value["itemId"] == "collection-packet"
+        )
+        self.assertTrue(receipt["included"])
+        self.assertEqual(receipt["scopeAuthority"], "authoritative")
+        self.assertEqual(receipt["scopeMechanismIds"], ["release-membership"])
+        self.assertEqual(receipt["ancestry"]["roots"][0]["id"], "release-root")
+        self.assertEqual(
+            receipt["ancestry"]["roots"][0]["mechanismIds"],
+            ["release-membership"],
+        )
+        self.assertNotIn("historical-membership", {edge["id"] for edge in first["edges"]})
+        self.assertEqual(first["query"]["scopePolicy"]["source"], "workspace-query")
+        self.assertEqual(first["query"]["scopePolicy"]["rootTypes"], ["release"])
+
+        first_scope_fingerprint = receipt["scopeFingerprint"]
+        first_evidence = receipt["evidence"]
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                "UPDATE tracker_items SET issue_key = 'ROOT-NEW' WHERE id = 'release-root'"
+            )
+            connection.commit()
+        second = self.reader.traverse_graph(request)
+        second_receipt = next(
+            value for value in second["receipts"]
+            if value["itemId"] == "collection-packet"
+        )
+        self.assertEqual(second_receipt["scopeFingerprint"], first_scope_fingerprint)
+        self.assertEqual(second_receipt["evidence"], first_evidence)
+
+    def test_dispatch_scope_policy_preserves_legacy_defaults_when_omitted(self) -> None:
+        policy = resolve_dispatch_scope_policy(
+            {"mode": "dispatch-eligible-work-v1"},
+            self.reader._registry,
+        )
+
+        self.assertEqual(policy["source"], "built-in-default")
+        self.assertEqual(policy["rootTypes"], ["launch", "milestone"])
+        self.assertEqual(policy["implicitRootSelection"], "all-eligible")
+        self.assertEqual(
+            [mechanism["id"] for mechanism in policy["mechanisms"]],
+            ["launch-membership", "milestone-contribution"],
+        )
+
+    def test_dispatch_scope_policy_prefers_authority_and_can_use_fallback(self) -> None:
+        self._write_dispatch_scope_policy({
+            "version": 1,
+            "rootTypes": ["launch"],
+            "implicitRootSelection": "all-eligible",
+            "ancestryDepth": 2,
+            "mechanisms": [
+                {
+                    "id": "current-membership",
+                    "relationshipType": "in-collection",
+                    "direction": "outgoing",
+                    "authority": "authoritative",
+                },
+                {
+                    "id": "legacy-membership",
+                    "relationshipType": "part-of-launch",
+                    "direction": "outgoing",
+                    "authority": "fallback",
+                    "scopeRoles": ["core"],
+                },
+            ],
+        })
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "fallback-packet", "PACKET-F", "task", self._ready_dispatch_fields())
+            self._insert(connection, "current-packet", "PACKET-C", "task", self._ready_dispatch_fields())
+            self._link(connection, "fallback-link", "REL-F", "fallback-packet", "launch-1", "part-of-launch", scope_role="core")
+            self._link(connection, "current-link", "REL-C", "current-packet", "launch-1", "in-collection")
+            self._link(connection, "current-legacy-link", "REL-C-OLD", "current-packet", "launch-1", "part-of-launch", scope_role="core")
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {"id": "dispatch-eligible-work-v1", "params": {}},
+        })
+        receipts = {value["itemId"]: value for value in result["receipts"]}
+        self.assertEqual(receipts["fallback-packet"]["scopeAuthority"], "fallback")
+        self.assertEqual(receipts["fallback-packet"]["scopeMechanismIds"], ["legacy-membership"])
+        self.assertEqual(receipts["current-packet"]["scopeAuthority"], "authoritative")
+        self.assertEqual(receipts["current-packet"]["scopeMechanismIds"], ["current-membership"])
+        self.assertNotIn("current-legacy-link", {edge["id"] for edge in result["edges"]})
+
+    def test_dispatch_scope_policy_invalid_or_missing_roots_fails_closed(self) -> None:
+        self._write_dispatch_scope_policy({
+            "version": 1,
+            "rootTypes": ["release"],
+            "implicitRootSelection": "require-explicit",
+            "ancestryDepth": 2,
+            "mechanisms": [{
+                "id": "release-membership",
+                "relationshipType": "in-collection",
+                "direction": "outgoing",
+                "authority": "authoritative",
+            }],
+        })
+        with self.assertRaises(ReaderError) as missing:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {"id": "dispatch-eligible-work-v1", "params": {}},
+            })
+        self.assertEqual(missing.exception.code, "DISPATCH_ROOTS_REQUIRED")
+
+        self._write_dispatch_scope_policy({
+            "version": 1,
+            "rootTypes": ["release"],
+            "implicitRootSelection": "all-eligible",
+            "ancestryDepth": 2,
+            "mechanisms": [
+                {
+                    "id": "one",
+                    "relationshipType": "in-collection",
+                    "direction": "outgoing",
+                    "authority": "authoritative",
+                },
+                {
+                    "id": "two",
+                    "relationshipType": "in-collection",
+                    "direction": "outgoing",
+                    "authority": "fallback",
+                },
+            ],
+        })
+        with self.assertRaises(ReaderError) as invalid:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {"id": "dispatch-eligible-work-v1", "params": {}},
+            })
+        self.assertEqual(invalid.exception.code, "DISPATCH_SCOPE_CONFIG_INVALID")
+        self.assertEqual(
+            invalid.exception.details["path"],
+            "definition.scopePolicy.mechanisms[1]",
+        )
 
     def test_dispatch_transitive_milestone_ancestry_admits_without_direct_edge(self) -> None:
         ready = {

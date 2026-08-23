@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.11.0 - 2026-08-23
+
+- Make dispatch scope semantics externally configurable through each saved
+  query's versioned `scopePolicy`. Workspaces can select neutral root types,
+  require explicit roots, configure bounded relationship mechanisms and
+  directions, and mark mechanisms as authoritative or fallback while the
+  built-in launch and milestone behavior remains backward compatible.
+- Add the neutral `rootKeys` parameter while retaining `launchKeys` as a
+  compatibility alias. Dispatch receipts now preserve effective policy,
+  resolved native root IDs, mechanism IDs, authority, and stable fingerprints;
+  mutable display-key changes do not alter stable scope identity.
+- Fail closed on malformed or overlapping scope configuration, ambiguous
+  mechanism matches, and missing required roots. Historical fallback
+  relationships remain queryable evidence but cannot override a current
+  authoritative path. (#39)
+
 ## 0.10.0 - 2026-08-23
 
 - Add fail-closed cross-repository delivery attribution from an exact leading

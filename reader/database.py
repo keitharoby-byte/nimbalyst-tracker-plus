@@ -35,7 +35,7 @@ try:
         SCHEMA_ADAPTER,
         ReaderError,
     )
-    from .query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, sort_sql, validate_sort
+    from .query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, resolve_dispatch_scope_policy, sort_sql, validate_sort
     from .registry import bundled_diagnostics, effective_registry
     from .traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage
 except ImportError:  # pragma: no cover - used when server.py runs as a script
@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - used when server.py runs as a script
         SCHEMA_ADAPTER,
         ReaderError,
     )
-    from query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, sort_sql, validate_sort  # type: ignore[no-redef]
+    from query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, resolve_dispatch_scope_policy, sort_sql, validate_sort  # type: ignore[no-redef]
     from registry import bundled_diagnostics, effective_registry  # type: ignore[no-redef]
     from traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage  # type: ignore[no-redef]
 
@@ -1504,6 +1504,11 @@ class NativeTrackerReader:
         policy = self._registry["dispatchPolicy"]
         evidence_mapping = self._registry["dispatchEvidence"]
         evidence_mapping_fingerprint = self._stable_fingerprint(evidence_mapping)
+        scope_policy = resolve_dispatch_scope_policy(
+            query_echo.get("expanded", {}),
+            self._registry,
+        )
+        scope_policy_fingerprint = self._stable_fingerprint(scope_policy)
         currentness_sources: list[dict[str, Any]] = []
         for signal, value_type, constraint in (
             ("currentRevision", "string", "equals packetRevision"),
@@ -1522,6 +1527,14 @@ class NativeTrackerReader:
         saved = query_echo["savedQuery"]
         params = dict(saved.get("params", {}))
         launch_keys = [str(value) for value in params.get("launchKeys", [])]
+        root_keys = [str(value) for value in params.get("rootKeys", [])]
+        if launch_keys and root_keys:
+            raise ReaderError(
+                "SAVED_QUERY_PARAMS_INVALID",
+                "launchKeys and rootKeys cannot be combined.",
+            )
+        requested_root_keys = root_keys or launch_keys
+        root_key_parameter = "rootKeys" if root_keys else "launchKeys" if launch_keys else None
         include_unscoped = bool(params.get("includeUnscoped", False))
         role_id = params.get("roleId")
         if include_unscoped and not policy["admittedUnscopedTypes"]:
@@ -1596,82 +1609,120 @@ class NativeTrackerReader:
                 )
             return evidence_by_item[item_id]
 
-        eligible_launches = [
+        configured_root_types = {
+            str(value).casefold() for value in scope_policy["rootTypes"]
+        }
+        eligible_roots = [
             item for item in items
             if not item.get("archived")
-            and item.get("primaryType") in {"launch", "milestone"}
+            and str(item.get("primaryType") or "").casefold() in configured_root_types
             and str(dispatch_evidence(item["id"])["workflow"]["value"] or "").casefold()
             in {value.casefold() for value in policy["eligibleLaunchStatuses"]}
         ]
-        launch_by_key: dict[str, list[dict[str, Any]]] = {}
-        for launch in eligible_launches:
-            key = str(launch.get("launchKey") or "").strip()
-            if key:
-                launch_by_key.setdefault(key.casefold(), []).append(launch)
+        roots_by_key: dict[str, list[dict[str, Any]]] = {}
+        for root in eligible_roots:
+            for key in (root.get("id"), root.get("issueKey"), root.get("launchKey")):
+                normalized_key = str(key or "").strip()
+                if normalized_key:
+                    roots_by_key.setdefault(normalized_key.casefold(), []).append(root)
         selected_root_ids: set[str] = set()
-        for raw_key in launch_keys:
-            matches = launch_by_key.get(raw_key.casefold(), [])
+        for raw_key in requested_root_keys:
+            matches_by_id = {
+                str(item["id"]): item
+                for item in roots_by_key.get(raw_key.casefold(), [])
+            }
+            matches = [matches_by_id[key] for key in sorted(matches_by_id)]
             if not matches:
                 raise ReaderError(
                     "ROOT_NOT_FOUND",
-                    "A dispatch launch root was not found or is not eligible.",
+                    "A configured dispatch root was not found or is not eligible.",
                     {"root": raw_key},
                 )
             if len(matches) > 1:
                 raise ReaderError(
                     "ROOT_AMBIGUOUS",
-                    "A dispatch launch root matched more than one eligible item.",
+                    "A configured dispatch root matched more than one eligible item.",
                     {"root": raw_key},
                 )
             selected_root_ids.add(matches[0]["id"])
-        if not launch_keys:
-            selected_root_ids = {item["id"] for item in eligible_launches}
-
-        active_scope_edges = [
-            edge for edge in live_edges
-            if edge.get("state") == "active"
-            and (
-                (
-                    edge.get("relationshipType") == "part-of-launch"
-                    and edge.get("scopeRole") in policy["membershipRoles"]
+        if not requested_root_keys:
+            if scope_policy["implicitRootSelection"] == "require-explicit":
+                raise ReaderError(
+                    "DISPATCH_ROOTS_REQUIRED",
+                    "The effective dispatch scope policy requires explicit root keys.",
+                    {"acceptedParameter": "rootKeys"},
                 )
-                or (
-                    edge.get("relationshipType") == "contributes-to"
-                    and edge.get("contributionRole") in policy["contributionRoles"]
-                )
-            )
-        ]
-        outgoing_scope: dict[str, list[dict[str, Any]]] = {}
-        for edge in active_scope_edges:
-            outgoing_scope.setdefault(edge["sourceId"], []).append(edge)
-        for values in outgoing_scope.values():
-            values.sort(key=lambda edge: edge["id"])
+            selected_root_ids = {item["id"] for item in eligible_roots}
 
-        def ancestry(item_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        mechanism_by_edge: dict[str, dict[str, Any]] = {}
+        adjacency: dict[str, list[tuple[dict[str, Any], str, dict[str, Any]]]] = {}
+        for edge in live_edges:
+            if edge.get("state") != "active":
+                continue
+            matched: list[dict[str, Any]] = []
+            for mechanism in scope_policy["mechanisms"]:
+                if edge.get("relationshipType") != mechanism["relationshipType"]:
+                    continue
+                if "scopeRoles" in mechanism and edge.get("scopeRole") not in mechanism["scopeRoles"]:
+                    continue
+                if "contributionRoles" in mechanism and edge.get("contributionRole") not in mechanism["contributionRoles"]:
+                    continue
+                matched.append(mechanism)
+            if len(matched) > 1:
+                raise ReaderError(
+                    "DISPATCH_SCOPE_AMBIGUOUS",
+                    "A relationship matches more than one configured dispatch scope mechanism.",
+                    {
+                        "relationshipId": edge["id"],
+                        "mechanismIds": sorted(value["id"] for value in matched),
+                    },
+                )
+            if not matched:
+                continue
+            mechanism = matched[0]
+            mechanism_by_edge[str(edge["id"])] = mechanism
+            if mechanism["direction"] == "outgoing":
+                current_id, next_id = str(edge["sourceId"]), str(edge["targetId"])
+            else:
+                current_id, next_id = str(edge["targetId"]), str(edge["sourceId"])
+            adjacency.setdefault(current_id, []).append((edge, next_id, mechanism))
+        for values in adjacency.values():
+            values.sort(key=lambda value: (str(value[0]["id"]), value[2]["id"]))
+
+        def ancestry(
+            item_id: str,
+            *,
+            include_fallback: bool,
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
             ancestry_edges: dict[str, dict[str, Any]] = {}
             ancestry_nodes: dict[str, dict[str, Any]] = {}
+            ancestry_mechanisms: dict[str, dict[str, Any]] = {}
             frontier = [item_id]
             seen = {item_id}
-            for _depth in range(4):
+            for _depth in range(scope_policy["ancestryDepth"]):
                 next_frontier: list[str] = []
-                for source_id in sorted(frontier):
-                    for edge in outgoing_scope.get(source_id, []):
-                        target_id = edge["targetId"]
-                        target = items_by_id.get(target_id)
+                for current_id in sorted(frontier):
+                    for edge, next_id, mechanism in adjacency.get(current_id, []):
+                        if mechanism["authority"] == "fallback" and not include_fallback:
+                            continue
+                        target = items_by_id.get(next_id)
                         if target is None or target.get("archived"):
                             ancestry_edges[edge["id"]] = edge
+                            ancestry_mechanisms[edge["id"]] = mechanism
                             continue
                         ancestry_edges[edge["id"]] = edge
-                        ancestry_nodes[target_id] = target
-                        if target_id not in seen:
-                            seen.add(target_id)
-                            next_frontier.append(target_id)
+                        ancestry_mechanisms[edge["id"]] = mechanism
+                        ancestry_nodes[next_id] = target
+                        if next_id not in seen:
+                            seen.add(next_id)
+                            next_frontier.append(next_id)
                 frontier = next_frontier
                 if not frontier:
                     break
             return (
                 [ancestry_nodes[key] for key in sorted(ancestry_nodes)],
                 [ancestry_edges[key] for key in sorted(ancestry_edges)],
+                ancestry_mechanisms,
             )
 
         dispatch_types = set(policy["dispatchableTypes"])
@@ -1705,7 +1756,34 @@ class NativeTrackerReader:
         for item in sorted(source_items, key=lambda value: value["id"]):
             fields = fields_by_id[item["id"]]
             evidence = dispatch_evidence(item["id"])
-            ancestry_nodes, ancestry_edges = ancestry(item["id"])
+            authoritative_nodes, authoritative_edges, authoritative_mechanisms = ancestry(
+                item["id"],
+                include_fallback=False,
+            )
+            authoritative_scoped = (
+                item["id"] in selected_root_ids
+                or any(node["id"] in selected_root_ids for node in authoritative_nodes)
+            )
+            if authoritative_scoped:
+                ancestry_nodes = authoritative_nodes
+                ancestry_edges = authoritative_edges
+                ancestry_mechanisms = authoritative_mechanisms
+                scope_authority = "authoritative"
+            else:
+                ancestry_nodes, ancestry_edges, ancestry_mechanisms = ancestry(
+                    item["id"],
+                    include_fallback=True,
+                )
+                scope_authority = (
+                    "fallback"
+                    if item["id"] in selected_root_ids
+                    or any(node["id"] in selected_root_ids for node in ancestry_nodes)
+                    else "none"
+                )
+            roots = [
+                node for node in ancestry_nodes
+                if node["id"] in {root["id"] for root in eligible_roots}
+            ]
             launches = [
                 node for node in ancestry_nodes
                 if node.get("primaryType") == "launch"
@@ -1718,15 +1796,17 @@ class NativeTrackerReader:
                 node for node in ancestry_nodes
                 if node.get("primaryType") == "train"
             ]
-            scoped_to_selected = any(
-                node["id"] in selected_root_ids
-                for node in [*launches, *milestones]
+            scoped_to_selected = (
+                item["id"] in selected_root_ids
+                or any(node["id"] in selected_root_ids for node in ancestry_nodes)
             )
+            has_configured_scope = bool(roots) or item["id"] in {
+                root["id"] for root in eligible_roots
+            }
             unscoped_admitted = (
                 include_unscoped
                 and item["primaryType"] in policy["admittedUnscopedTypes"]
-                and not launches
-                and not milestones
+                and not has_configured_scope
             )
             admission_reasons: list[str] = []
             if item.get("archived"):
@@ -1872,8 +1952,9 @@ class NativeTrackerReader:
                 {
                     "itemId": item["id"],
                     "relationshipIds": relationship_ids,
-                    "launchKeys": launch_keys,
+                    "resolvedRootIds": sorted(selected_root_ids),
                     "includeUnscoped": include_unscoped,
+                    "scopePolicyFingerprint": scope_policy_fingerprint,
                 }
             )
             receipt = {
@@ -1884,10 +1965,15 @@ class NativeTrackerReader:
                 "packetRevision": packet_revision,
                 "qaEvidenceRevision": qa_revision,
                 "ancestry": {
-                    "launches": self._dispatch_ancestry_rows(launches, ancestry_edges),
-                    "milestones": self._dispatch_ancestry_rows(milestones, ancestry_edges),
-                    "trains": self._dispatch_ancestry_rows(trains, ancestry_edges),
+                    "roots": self._dispatch_ancestry_rows(roots, ancestry_edges, ancestry_mechanisms),
+                    "launches": self._dispatch_ancestry_rows(launches, ancestry_edges, ancestry_mechanisms),
+                    "milestones": self._dispatch_ancestry_rows(milestones, ancestry_edges, ancestry_mechanisms),
+                    "trains": self._dispatch_ancestry_rows(trains, ancestry_edges, ancestry_mechanisms),
                 },
+                "scopeAuthority": scope_authority,
+                "scopeMechanismIds": sorted({
+                    mechanism["id"] for mechanism in ancestry_mechanisms.values()
+                }),
                 "dependencyEvidence": [
                     {
                         "relationshipId": edge["id"],
@@ -1930,35 +2016,39 @@ class NativeTrackerReader:
             selected_relationships[key] for key in sorted(selected_relationships)
         ]
 
-        # Candidate edges are intentionally admission-scoped, but launch
-        # lifecycle validation must inspect the selected roots' actual active
-        # membership graph. Keep that graph separate so non-dispatch members
-        # can prove a launch is structurally valid without leaking into the
-        # candidate response.
-        incoming_memberships: dict[str, list[dict[str, Any]]] = {}
+        # Validate selected roots against the configured authoritative graph,
+        # independently of which dispatchable rows reached detailed receipts.
+        # Fallback mechanisms remain available for migration but do not make
+        # historical relationships authoritative when the current graph exists.
+        incoming_authority: dict[str, list[tuple[dict[str, Any], str]]] = {}
         for edge in live_edges:
-            if (
-                edge.get("relationshipType") == "part-of-launch"
-                and edge.get("state") == "active"
-            ):
-                incoming_memberships.setdefault(str(edge["targetId"]), []).append(edge)
-        for values in incoming_memberships.values():
-            values.sort(key=lambda edge: str(edge["id"]))
+            mechanism = mechanism_by_edge.get(str(edge["id"]))
+            if mechanism is None or mechanism["authority"] != "authoritative":
+                continue
+            if mechanism["direction"] == "outgoing":
+                container_id, member_id = str(edge["targetId"]), str(edge["sourceId"])
+            else:
+                container_id, member_id = str(edge["sourceId"]), str(edge["targetId"])
+            incoming_authority.setdefault(container_id, []).append((edge, member_id))
+        for values in incoming_authority.values():
+            values.sort(key=lambda value: str(value[0]["id"]))
         launch_validation_relationships: dict[str, dict[str, Any]] = {}
-        validation_frontier = sorted(selected_root_ids)
+        validation_frontier = [(root_id, 0) for root_id in sorted(selected_root_ids)]
         inspected_validation_nodes: set[str] = set()
         while validation_frontier:
-            target_id = validation_frontier.pop(0)
-            if target_id in inspected_validation_nodes:
+            container_id, depth = validation_frontier.pop(0)
+            if container_id in inspected_validation_nodes:
                 continue
-            inspected_validation_nodes.add(target_id)
-            for edge in incoming_memberships.get(target_id, []):
+            inspected_validation_nodes.add(container_id)
+            if depth >= scope_policy["ancestryDepth"]:
+                continue
+            for edge, member_id in incoming_authority.get(container_id, []):
                 for endpoint_id in (str(edge["sourceId"]), str(edge["targetId"])):
                     endpoint = items_by_id.get(endpoint_id)
                     if endpoint is None or endpoint.get("archived"):
                         raise ReaderError(
                             "UNRESOLVED_EDGE",
-                            "A selected launch membership has an unavailable endpoint.",
+                            "A configured authoritative scope relationship has an unavailable endpoint.",
                             {
                                 "relationshipId": edge["id"],
                                 "endpointId": endpoint_id,
@@ -1966,10 +2056,9 @@ class NativeTrackerReader:
                             },
                         )
                 launch_validation_relationships[str(edge["id"])] = edge
-                source_id = str(edge["sourceId"])
-                if source_id not in inspected_validation_nodes:
-                    validation_frontier.append(source_id)
-            validation_frontier.sort()
+                if member_id not in inspected_validation_nodes:
+                    validation_frontier.append((member_id, depth + 1))
+            validation_frontier.sort(key=lambda value: (value[1], value[0]))
         launch_validation_edge_list = [
             launch_validation_relationships[key]
             for key in sorted(launch_validation_relationships)
@@ -2020,9 +2109,17 @@ class NativeTrackerReader:
             *scoped_normalization_findings,
             *self._semantic_duplicate_findings(validation_edge_list),
             *self._validate_timeline(selected_nodes, selected_edge_list),
-            *self._launch_findings(
-                launch_validation_nodes,
-                launch_validation_edge_list,
+            *(
+                self._launch_findings(
+                    launch_validation_nodes,
+                    launch_validation_edge_list,
+                )
+                if any(
+                    mechanism["authority"] == "authoritative"
+                    and mechanism["relationshipType"] == "part-of-launch"
+                    for mechanism in scope_policy["mechanisms"]
+                )
+                else []
             ),
             *self._dispatch_topology_findings(receipts, selected_edge_list),
         ]
@@ -2047,15 +2144,20 @@ class NativeTrackerReader:
             "expandedParameters": {
                 "roleId": role_id,
                 "launchKeys": launch_keys,
+                "rootKeys": root_keys,
                 "includeUnscoped": include_unscoped,
             },
             "resolvedRoots": sorted(selected_root_ids),
             "boundaryRules": {
-                "ancestryDepth": 4,
-                "membershipRoles": list(policy["membershipRoles"]),
-                "contributionRoles": list(policy["contributionRoles"]),
+                "ancestryDepth": scope_policy["ancestryDepth"],
                 "retiredRelationshipsExcluded": True,
                 "archivedRecordsExcluded": True,
+            },
+            "scopePolicy": {
+                **copy.deepcopy(scope_policy),
+                "fingerprint": scope_policy_fingerprint,
+                "rootKeyParameter": root_key_parameter,
+                "rootIdentifierFields": ["id", "issueKey", "launchKey"],
             },
             "evidenceMapping": {
                 "fingerprint": evidence_mapping_fingerprint,
@@ -2309,6 +2411,7 @@ class NativeTrackerReader:
     def _dispatch_ancestry_rows(
         nodes: list[Mapping[str, Any]],
         edges: list[Mapping[str, Any]],
+        mechanisms: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         endpoint_relationships: dict[str, list[str]] = {}
         for edge in edges:
@@ -2316,15 +2419,29 @@ class NativeTrackerReader:
                 str(edge["targetId"]),
                 [],
             ).append(str(edge["id"]))
-        return [
-            {
+        mechanism_map = mechanisms or {}
+        rows: list[dict[str, Any]] = []
+        for node in sorted(nodes, key=lambda value: str(value["id"])):
+            relationship_ids = sorted(endpoint_relationships.get(str(node["id"]), []))
+            mechanism_ids = sorted({
+                str(mechanism_map[relationship_id]["id"])
+                for relationship_id in relationship_ids
+                if relationship_id in mechanism_map
+            })
+            authorities = {
+                str(mechanism_map[relationship_id]["authority"])
+                for relationship_id in relationship_ids
+                if relationship_id in mechanism_map
+            }
+            rows.append({
                 "id": node["id"],
                 "issueKey": node.get("issueKey"),
                 "launchKey": node.get("launchKey"),
-                "relationshipIds": sorted(endpoint_relationships.get(str(node["id"]), [])),
-            }
-            for node in sorted(nodes, key=lambda value: str(value["id"]))
-        ]
+                "relationshipIds": relationship_ids,
+                "mechanismIds": mechanism_ids,
+                "authority": "fallback" if "fallback" in authorities else "authoritative",
+            })
+        return rows
 
     def _dispatch_topology_findings(
         self,
