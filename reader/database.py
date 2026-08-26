@@ -608,7 +608,6 @@ class NativeTrackerReader:
         graph = self.traverse_graph({
             "workspacePath": parsed["workspacePath"],
             "roots": [parsed["launch"]],
-            "membership": {"relationshipTypes": ["part-of-launch"], "direction": "incoming", "status": ["active"], "maxDepth": 1},
             "expand": {"relationshipTypes": relationship_types, "direction": "both", "maxDepth": 1, "edgeWhere": {"status": ["active"]}, "externalEndpointBehavior": "boundary"},
             "limits": {"maxNodes": parsed["maxItems"], "maxEdges": min(self._registry["caps"]["traverseEdgesMax"], parsed["maxItems"] * 2)},
             "failOn": {"truncation": False, "validation": False},
@@ -644,6 +643,7 @@ class NativeTrackerReader:
             "milestoneRows": sum(item.get("primaryType") == "milestone" for item in items),
             "rootLaunch": parsed["launch"],
             "membership": {"memberCount": sum(bool(item.get("launchMember")) for item in items), "boundaryCount": len(boundary_nodes)},
+            "relationshipProjection": graph["query"]["relationshipProjection"],
         })
         result = {
             "generatedAt": watermark["generatedAt"],
@@ -1179,13 +1179,13 @@ class NativeTrackerReader:
                 if predicate_matches(row_by_id[item_id], fields_by_id[item_id], node_where, self._registry)
             }
         kept_ids = set(resolved_roots) | kept_member_ids | boundary_ids
-        candidate_edges = [edge for edge in traversal_edges if edge["id"] in selected_edge_ids]
+        walked_edges = [edge for edge in traversal_edges if edge["id"] in selected_edge_ids]
         findings = [
             *self._registry_findings(),
             *self._schema_discovery_findings(schema_discovery),
         ]
         tolerated_archived_ids: set[str] = set()
-        for edge in candidate_edges:
+        for edge in walked_edges:
             for endpoint in (edge["sourceId"], edge["targetId"]):
                 item = items_by_id.get(endpoint)
                 tolerated = item and item.get("archived") and edge.get("relationshipType") == "evidences" and edge.get("state") == "active" and edge.get("effectiveRevision")
@@ -1202,7 +1202,18 @@ class NativeTrackerReader:
                         },
                     )
         kept_ids = {item_id for item_id in kept_ids if not items_by_id[item_id].get("archived") or item_id in tolerated_archived_ids}
-        selected_edges = [edge for edge in candidate_edges if edge["sourceId"] in kept_ids and edge["targetId"] in kept_ids]
+        eligible_edges = [
+            edge for edge in edges
+            if (
+                (membership is not None and edge_matches(edge, membership, membership=True))
+                or (expand is not None and edge_matches(edge, expand, membership=False))
+            )
+        ]
+        candidate_edges = [
+            edge for edge in eligible_edges
+            if edge["sourceId"] in kept_ids and edge["targetId"] in kept_ids
+        ]
+        selected_edges = list(candidate_edges)
         selected_edge_ids = {edge["id"] for edge in selected_edges}
         findings.extend(
             finding for finding in normalization_findings
@@ -1228,6 +1239,13 @@ class NativeTrackerReader:
             "failOn": dict(fail_on),
             "paginate": paginate,
         }
+        query_receipt["relationshipProjection"] = self._relationship_projection_receipt(
+            edges,
+            eligible_edges,
+            candidate_edges,
+            selected_edges,
+            len(link_db_rows),
+        )
         query_receipt["queryFingerprint"] = self._stable_fingerprint(
             {
                 "query": query_receipt,
@@ -1263,6 +1281,14 @@ class NativeTrackerReader:
             )
             node_page = node_stream[node_offset:node_offset + max_nodes]
             edge_page = edge_stream[edge_offset:edge_offset + max_edges]
+            query_receipt["relationshipProjection"] = self._relationship_projection_receipt(
+                edges,
+                eligible_edges,
+                candidate_edges,
+                edge_stream,
+                len(link_db_rows),
+                returned_count=len(edge_page),
+            )
             result = {
                 "nodes": [item for kind, item in node_page if kind == "node"],
                 "edges": edge_page,
@@ -1317,6 +1343,13 @@ class NativeTrackerReader:
         if len(selected_edges) > max_edges:
             selected_edges = sorted(selected_edges, key=lambda edge: edge["id"])[:max_edges]
             truncated = True
+        query_receipt["relationshipProjection"] = self._relationship_projection_receipt(
+            edges,
+            eligible_edges,
+            candidate_edges,
+            selected_edges,
+            len(link_db_rows),
+        )
         if truncated and fail_on.get("truncation", False):
             raise ReaderError("RESULT_TRUNCATED", "Traversal caps prevented a complete graph response. Retry with paginate=true and follow every page.nextCursor.")
         nodes = [items_by_id[item_id] for item_id in sorted(retained_ids - boundary_ids)]
@@ -3482,6 +3515,7 @@ class NativeTrackerReader:
                         "invalid-relationship-type",
                         "error",
                         f"Relationship {row['issue_key'] or link_id} has no supported relationship type.",
+                        item_ids=[source["itemId"], target["itemId"]],
                         relationship_ids=[link_id],
                     )
                 )
@@ -3539,6 +3573,7 @@ class NativeTrackerReader:
                 "updated": self._date_time_string(row["updated"]),
                 "targetInSnapshot": target_id in items_by_id,
                 "legacy": False,
+                "sourceKind": "native-timeline-link",
             }
             if relationship_type == "part-of-launch":
                 if edge["scopeRole"] not in self._registry["scopeRoles"]:
@@ -3645,9 +3680,55 @@ class NativeTrackerReader:
                             "updated": item.get("updated"),
                             "targetInSnapshot": target_id in items_by_id,
                             "legacy": legacy,
+                            "sourceKind": "legacy-field" if legacy else "native-inline-field",
                         }
                     )
         return edges, findings
+
+    @staticmethod
+    def _relationship_projection_receipt(
+        normalized_edges: list[dict[str, Any]],
+        eligible_edges: list[dict[str, Any]],
+        candidate_edges: list[dict[str, Any]],
+        emitted_edges: list[dict[str, Any]],
+        native_row_count: int,
+        *,
+        returned_count: int | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile normalized relationship input with the emitted projection."""
+        normalized_ids = {edge["id"] for edge in normalized_edges}
+        eligible_ids = {edge["id"] for edge in eligible_edges}
+        candidate_ids = {edge["id"] for edge in candidate_edges}
+        emitted_ids = {edge["id"] for edge in emitted_edges}
+        contract_excluded = normalized_ids - eligible_ids
+        outside_projection = eligible_ids - candidate_ids
+        limited = candidate_ids - emitted_ids
+        normalized_native_count = sum(
+            edge.get("sourceKind") == "native-timeline-link"
+            for edge in normalized_edges
+        )
+        excluded_types = sorted({
+            str(edge.get("relationshipType") or "unknown")
+            for edge in normalized_edges
+            if edge["id"] in contract_excluded
+        })
+        return {
+            "nativeRowCount": native_row_count,
+            "normalizedNativeRowCount": normalized_native_count,
+            "normalizationExcludedNativeRowCount": max(0, native_row_count - normalized_native_count),
+            "normalizedSourceCount": len(normalized_ids),
+            "eligibleCount": len(eligible_ids),
+            "emittedCount": len(emitted_ids),
+            "returnedCount": len(emitted_ids) if returned_count is None else returned_count,
+            "excludedCount": len(normalized_ids - emitted_ids),
+            "excludedByReason": {
+                "contract": len(contract_excluded),
+                "endpointOutsideProjection": len(outside_projection),
+                "resultLimit": len(limited),
+            },
+            "contractExcludedRelationshipTypes": excluded_types,
+            "reconciled": normalized_ids == emitted_ids | contract_excluded | outside_projection | limited,
+        }
 
     def _apply_timeline_analysis(
         self,

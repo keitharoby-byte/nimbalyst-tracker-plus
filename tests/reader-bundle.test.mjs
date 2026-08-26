@@ -36,7 +36,7 @@ async function fixture() {
   }
   const identity = {
     extensionVersion: '9.9.9',
-    adapterVersion: 6,
+    adapterVersion: 7,
     registryVersion: 5,
     files,
   };
@@ -80,7 +80,7 @@ test('mismatched live-update assets fail with restart-required diagnostics', asy
         assert.ok(error instanceof ReaderBundleError);
         assert.equal(error.code, 'READER_RESTART_REQUIRED');
         assert.equal(error.details.extensionVersion, '9.9.9');
-        assert.equal(error.details.adapterVersion, 6);
+        assert.equal(error.details.adapterVersion, 7);
         assert.equal(error.details.registryVersion, 5);
         assert.match(error.details.assetPath, /saved-queries\.json$/);
         assert.match(error.details.expectedHash, /^[a-f0-9]{64}$/);

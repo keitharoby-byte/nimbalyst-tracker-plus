@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.12.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.13.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,19 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.12.0
+## What's new in 0.13.0
+
+Rooted timeline sync now selects membership according to the native root type.
+Launches use `part-of-launch`; milestones and releases use `in-collection`.
+Active registered relationships between emitted endpoints are closed into the
+projection, so a member's typed relationship cannot disappear simply because
+its other endpoint is boundary context.
+
+Release-rooted milestone summaries now contain every emitted direct milestone
+member. Relationship receipts reconcile normalized source, eligible, emitted,
+and explicitly excluded counts, including named contract exclusions. (#41)
+
+## Previously in 0.12.0
 
 Dispatch queries now honor an explicit `failOn.unresolvedEvidence: false`.
 Incomplete rows remain excluded and fully auditable, while independently

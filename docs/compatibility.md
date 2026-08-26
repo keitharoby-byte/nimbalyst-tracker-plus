@@ -2,14 +2,14 @@
 
 ## Validated release
 
-- Validation date: 2026-08-25
+- Validation date: 2026-08-26
 - Nimbalyst: 0.72.8 packaged build
-- Extension: Tracker+ 0.12.0
+- Extension: Tracker+ 0.13.0
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows
 - Database backend: SQLite
-- Schema adapter: `tracker-items-normalized-timeline-v6`
+- Schema adapter: `tracker-items-normalized-timeline-v7`
 - Registry: version 5
 - Saved-query catalog: version 1
 - Python: standard-library `sqlite3`

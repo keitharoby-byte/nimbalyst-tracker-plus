@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.13.0 - 2026-08-26
+
+- Select rooted membership from the native root type: launches use
+  `part-of-launch`, while milestones and releases use `in-collection`.
+  Collection members remain interior nodes, their one-hop typed context stays
+  bounded, and all eligible relationships whose endpoints are emitted are
+  included deterministically.
+- Reconcile native rows, normalized relationships, eligible relationships,
+  emitted relationships, and exclusions in each rooted projection receipt.
+  Unsupported relationship types retain a named fail-closed diagnostic tied
+  to their selected endpoints.
+- Make release-rooted milestone summaries and counts agree with emitted direct
+  milestone membership without changing traversal limits, pagination, or
+  no-selector behavior. (#41)
+
 ## 0.12.0 - 2026-08-25
 
 - Honor an explicit `failOn.unresolvedEvidence: false` in dispatch saved

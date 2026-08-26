@@ -583,6 +583,52 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(snapshot["source"]["membership"], {"memberCount": 2, "boundaryCount": 1})
         self.assertFalse(snapshot["page"]["queryTruncated"])
 
+    def test_milestone_rooted_snapshot_preserves_member_implementation_edge(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "milestone-root", "MS-ROOT", "milestone", {
+                "title": "Milestone root", "status": "active", "targetDate": "2026-09-01",
+            })
+            self._insert(connection, "milestone-task", "TASK-1", "task", {
+                "title": "Milestone task",
+                "status": "active",
+                "collection": {"itemId": "milestone-root"},
+            })
+            self._insert(connection, "delivery-plan", "PLAN-1", "plan", {
+                "title": "Delivery plan", "status": "active",
+            })
+            self._link(
+                connection,
+                "link-implementation",
+                "REL-IMPLEMENTATION",
+                "milestone-task",
+                "delivery-plan",
+                "implements",
+            )
+            connection.commit()
+
+        snapshot = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 50,
+            "launch": "MS-ROOT",
+        })
+
+        relationship = next(
+            edge for edge in snapshot["relationships"]
+            if edge["id"] == "link-implementation"
+        )
+        self.assertEqual(
+            (relationship["sourceId"], relationship["relationshipType"], relationship["targetId"]),
+            ("milestone-task", "implements", "delivery-plan"),
+        )
+        self.assertFalse(any(finding["severity"] == "error" for finding in snapshot["validation"]))
+        receipt = snapshot["source"]["relationshipProjection"]
+        self.assertTrue(receipt["reconciled"])
+        self.assertEqual(
+            receipt["normalizedSourceCount"],
+            receipt["emittedCount"] + receipt["excludedCount"],
+        )
+
     def test_launch_snapshot_surfaces_nested_lane_timeline_items_as_boundary(self) -> None:
         # Regression for issue #23: registered timeline-item walk steps that are
         # part-of-launch members of a nested lane (itself a launch container)
@@ -959,6 +1005,36 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertIn("release-1", {node["id"] for node in release_walk["nodes"]})
         milestone_walk = self.reader.traverse_graph({"workspacePath": self.workspace, "roots": ["M-ALPHA"]})
         self.assertIn("coll-task-m", {node["id"] for node in milestone_walk["nodes"]})
+
+    def test_release_rooted_snapshot_summarizes_all_milestone_members(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "release-summary", "REL-SUMMARY", "release", {
+                "title": "Release summary", "status": "active", "targetDate": "2026-10-01",
+            })
+            for index in range(10):
+                self._insert(connection, f"release-milestone-{index}", f"MS-{index}", "milestone", {
+                    "title": f"Milestone {index}",
+                    "status": "active",
+                    "targetDate": f"2026-09-{index + 1:02d}",
+                    "collection": {"itemId": "release-summary"},
+                })
+            connection.commit()
+
+        snapshot = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 50,
+            "launch": "REL-SUMMARY",
+        })
+
+        milestone_ids = {item["id"] for item in snapshot["milestones"]}
+        self.assertEqual(milestone_ids, {f"release-milestone-{index}" for index in range(10)})
+        self.assertEqual(snapshot["source"]["milestoneRows"], 10)
+        self.assertEqual(snapshot["source"]["membership"], {"memberCount": 10, "boundaryCount": 0})
+        receipt = snapshot["source"]["relationshipProjection"]
+        self.assertEqual(receipt["emittedCount"], 10)
+        self.assertEqual(receipt["normalizedSourceCount"], receipt["emittedCount"] + receipt["excludedCount"])
+        self.assertTrue(receipt["reconciled"])
 
     def test_release_containers_surface_in_timeline_snapshot(self) -> None:
         self._insert_release_collection_fixture()

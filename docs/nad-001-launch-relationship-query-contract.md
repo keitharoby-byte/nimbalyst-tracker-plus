@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.12.0. This document describes only the
+Accepted; amended for Tracker+ 0.13.0. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -41,6 +41,21 @@ selected duplicates produce deterministic findings.
 Traversal excludes retired, archived, filtered, and out-of-boundary evidence
 before duplicate validation. Current endpoint rows override stale embedded
 metadata. Unresolved selected roots or endpoints are terminal.
+
+Rooted timeline projections derive membership from the registered root type.
+Launch roots use active incoming `part-of-launch`; milestone and release roots
+use active incoming `in-collection`. After the bounded node set is selected,
+every stage-eligible relationship whose endpoints are both emitted is included
+even when that edge was not needed to discover either endpoint.
+
+Projection receipts partition normalized relationships into emitted,
+contract-excluded, endpoint-outside-projection, and result-limit counts. The
+partition must reconcile exactly. Unknown relationship types are excluded
+during normalization with a named error tied to their known endpoints.
+
+The milestone summary contains emitted, non-boundary milestone members. A
+direct milestone member of a release is an interior member rather than
+boundary context, so the summary and emitted membership agree.
 
 ### Queries are externally managed
 
