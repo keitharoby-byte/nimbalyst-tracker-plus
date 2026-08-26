@@ -37,6 +37,9 @@ DATA_FIELDS = {
 }
 ROLE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 SCOPE_MECHANISM_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+DISPATCH_FAIL_ON_KEYS = {
+    "truncation", "validation", "warning", "unresolvedEvidence",
+}
 
 
 def _bounded_string_list(value: Any) -> bool:
@@ -47,6 +50,25 @@ def _bounded_string_list(value: Any) -> bool:
         and all(isinstance(entry, str) and 0 < len(entry.strip()) <= 100 for entry in value)
         and len({entry.strip().casefold() for entry in value}) == len(value)
     )
+
+
+def resolve_dispatch_fail_on_policy(definition: Mapping[str, Any]) -> dict[str, bool]:
+    """Validate dispatch failure controls while preserving fail-closed defaults."""
+    configured = definition.get("failOn", {})
+    if (
+        not isinstance(configured, Mapping)
+        or set(configured) - DISPATCH_FAIL_ON_KEYS
+        or not all(isinstance(value, bool) for value in configured.values())
+    ):
+        raise ReaderError(
+            "QUERY_INVALID",
+            "Dispatch failOn must contain only boolean failure controls.",
+            {"path": "definition.failOn"},
+        )
+    return {
+        key: configured.get(key, True)
+        for key in sorted(DISPATCH_FAIL_ON_KEYS)
+    }
 
 
 def resolve_dispatch_scope_policy(

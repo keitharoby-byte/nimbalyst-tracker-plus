@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const BUNDLE_MANIFEST = 'bundle-manifest.json';
 const BUNDLE_FORMAT_VERSION = 1;
-const SUPPORTED_ADAPTER_VERSION = 5;
+const SUPPORTED_ADAPTER_VERSION = 6;
 const SUPPORTED_REGISTRY_VERSION = 5;
 const SNAPSHOT_ATTEMPTS = 20;
 const SNAPSHOT_RETRY_MS = 100;

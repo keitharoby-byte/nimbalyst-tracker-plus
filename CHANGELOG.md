@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.12.0 - 2026-08-25
+
+- Honor an explicit `failOn.unresolvedEvidence: false` in dispatch saved
+  queries. Incomplete rows are excluded with detailed evidence receipts while
+  independently complete candidates, validation, watermark, and totals remain
+  available; omitted or `true` preserves the existing query-wide fail-close.
+- Add deterministic evidence-completeness and disposition provenance to
+  dispatch receipts, and reject non-boolean failure controls so ambiguous
+  configuration cannot weaken the default. (#40)
+
 ## 0.11.0 - 2026-08-23
 
 - Make dispatch scope semantics externally configurable through each saved

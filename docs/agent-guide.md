@@ -424,7 +424,8 @@ Every successful result includes:
 - ordered candidate `nodes`, detailed receipts for admitted rows, and a compact
   `excluded` subset;
 - revision, QA, ancestry, dependency, hold, route, custody,
-  survivor/collision, scope-fingerprint, and reason evidence per admitted row;
+  survivor/collision, scope-fingerprint, evidence-completeness, and reason
+  evidence per detailed row;
 - `admission` totals, reason counts, and a stable fingerprint for rows excluded
   before detailed evidence inspection;
 - `candidateCount`, source `inspectedCount`, `detailedReceiptCount`,
@@ -432,9 +433,13 @@ Every successful result includes:
   schema/registry provenance, watermark, and `queryFingerprint`;
 - per-root totals, only after all fail-closed checks pass.
 
-Any warning, error, unresolved selected edge, evidence gap, ordering cycle, or
-truncation returns a terminal structured error. Its receipt always contains
-`candidates: []` and never contains launch totals.
+Any warning, error, unresolved selected edge, ordering cycle, or truncation
+returns a terminal structured error. Evidence gaps are also terminal when
+`failOn.unresolvedEvidence` is omitted or `true`. An explicit `false` excludes
+only incomplete rows, preserves `evidenceCompleteness` in their detailed
+receipts, and returns independently complete candidates with trustworthy
+totals. `query.unresolvedEvidenceDisposition` reports `terminal` or
+`exclude-row`. Every `failOn` value must be a JSON boolean.
 
 The full `dispatchPolicy` object is workspace-overridable. Overrides replace
 the object, so include every key:
@@ -493,10 +498,13 @@ a `qa-signed-off` tag while keeping default sources for every other signal:
 }
 ```
 
-Mappings are validated and activated atomically. A missing required logical
-signal produces `DISPATCH_EVIDENCE_INCOMPLETE` with
-`incompleteEvidence[].missingLogicalSignals`, no candidates, and no launch
-totals. Revision currentness is reported as the logical signal
+Mappings are validated and activated atomically. By default, a missing required
+logical signal produces `DISPATCH_EVIDENCE_INCOMPLETE` with
+`incompleteEvidence[].missingLogicalSignals`, no candidates, and no root
+totals. With `failOn.unresolvedEvidence: false`, that row is excluded and its
+detailed receipt reports `evidenceCompleteness.state: incomplete`,
+`missingFields`, and `missingLogicalSignals`; complete rows remain eligible.
+Revision currentness is reported as the logical signal
 `revision-currentness`, not as a writable field. Its incomplete receipt lists
 the effective configured sources under `acceptedSources`; by default these are
 `currentRevision` equal to `packetRevision` or `isCurrentRevision=true`. A

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.11.0. This document describes only the
+Accepted; amended for Tracker+ 0.12.0. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -124,9 +124,12 @@ receipt derives its accepted sources from the effective registry and exposes
 their type and constraint. Similar-looking fields outside that mapping remain
 unaccepted; no implicit alias can weaken admission.
 
-Any warning, error, unresolved selected edge, incomplete evidence, topology
-cycle, or response truncation returns a terminal receipt with no candidates or
-launch totals.
+Any warning, error, unresolved selected edge, topology cycle, or response
+truncation returns a terminal receipt with no candidates or root totals.
+Incomplete evidence is terminal by default. A saved query may explicitly set
+`failOn.unresolvedEvidence` to `false`; in that mode only incomplete rows are
+excluded, their detailed receipts remain visible, and independently complete
+candidates retain trustworthy totals.
 
 Candidate ordering is:
 

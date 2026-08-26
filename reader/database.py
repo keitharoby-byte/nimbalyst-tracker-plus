@@ -35,7 +35,7 @@ try:
         SCHEMA_ADAPTER,
         ReaderError,
     )
-    from .query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, resolve_dispatch_scope_policy, sort_sql, validate_sort
+    from .query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, resolve_dispatch_fail_on_policy, resolve_dispatch_scope_policy, sort_sql, validate_sort
     from .registry import bundled_diagnostics, effective_registry
     from .traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage
 except ImportError:  # pragma: no cover - used when server.py runs as a script
@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - used when server.py runs as a script
         SCHEMA_ADAPTER,
         ReaderError,
     )
-    from query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, resolve_dispatch_scope_policy, sort_sql, validate_sort  # type: ignore[no-redef]
+    from query import PredicateCompiler, decode_cursor, encode_cursor, expand_saved_query, predicate_matches, resolve_dispatch_fail_on_policy, resolve_dispatch_scope_policy, sort_sql, validate_sort  # type: ignore[no-redef]
     from registry import bundled_diagnostics, effective_registry  # type: ignore[no-redef]
     from traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage  # type: ignore[no-redef]
 
@@ -1508,6 +1508,9 @@ class NativeTrackerReader:
             query_echo.get("expanded", {}),
             self._registry,
         )
+        fail_on = resolve_dispatch_fail_on_policy(
+            query_echo.get("expanded", {}),
+        )
         scope_policy_fingerprint = self._stable_fingerprint(scope_policy)
         currentness_sources: list[dict[str, Any]] = []
         for signal, value_type, constraint in (
@@ -1994,6 +1997,11 @@ class NativeTrackerReader:
                 },
                 "survivorState": survivor_state,
                 "collisionState": collision_state,
+                "evidenceCompleteness": {
+                    "state": "incomplete" if missing_signals else "complete",
+                    "missingFields": missing_fields,
+                    "missingLogicalSignals": sorted(missing_signals),
+                },
                 "scopeFingerprint": scope_fingerprint,
                 "eligibilityReasons": ["eligible"] if not reasons else [],
                 "exclusionReasons": sorted(set(reasons)),
@@ -2131,6 +2139,7 @@ class NativeTrackerReader:
         admission_receipt = {
             "sourceDispatchableCount": len(source_items),
             "detailedInspectionCount": len(receipts),
+            "incompleteEvidenceCount": len(incomplete),
             "preAdmissionExcludedCount": len(pre_admission_exclusions),
             "preAdmissionReasonCounts": dict(sorted(admission_reason_counts.items())),
             "preAdmissionFingerprint": self._stable_fingerprint(pre_admission_exclusions),
@@ -2165,7 +2174,10 @@ class NativeTrackerReader:
                 "acceptedLogicalSources": accepted_logical_sources,
             },
             "pagination": {"cursor": None, "truncated": False},
-            "failOn": dict(query_echo.get("expanded", {}).get("failOn", {})),
+            "failOn": fail_on,
+            "unresolvedEvidenceDisposition": (
+                "terminal" if fail_on["unresolvedEvidence"] else "exclude-row"
+            ),
         }
         query_receipt["queryFingerprint"] = self._stable_fingerprint(
             {
@@ -2206,7 +2218,7 @@ class NativeTrackerReader:
                 "Dispatch eligibility validation did not pass; no candidates or totals are trustworthy.",
                 {"receipt": terminal_receipt},
             )
-        if incomplete:
+        if incomplete and fail_on["unresolvedEvidence"]:
             terminal_receipt["incompleteEvidence"] = incomplete
             raise ReaderError(
                 "DISPATCH_EVIDENCE_INCOMPLETE",

@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from reader.contracts import ReaderError
 from reader.database import NativeTrackerReader
-from reader.query import resolve_dispatch_scope_policy
+from reader.query import resolve_dispatch_fail_on_policy, resolve_dispatch_scope_policy
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -88,6 +88,14 @@ class QueryTraverseTests(unittest.TestCase):
         if "rootKeys" not in query["optionalParams"]:
             query["optionalParams"].append("rootKeys")
         query["definition"]["scopePolicy"] = scope_policy
+        path.write_text(json.dumps(catalog), encoding="utf-8")
+
+    def _write_dispatch_fail_on(self, fail_on: dict[str, object]) -> None:
+        path = Path(self.workspace) / ".nimbalyst" / "tracker-plus.queries.json"
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+        query = catalog["queries"]["dispatch-eligible-work-v1"]
+        query["version"] = 3
+        query["definition"]["failOn"] = fail_on
         path.write_text(json.dumps(catalog), encoding="utf-8")
 
     @staticmethod
@@ -1622,6 +1630,15 @@ class QueryTraverseTests(unittest.TestCase):
             [mechanism["id"] for mechanism in policy["mechanisms"]],
             ["launch-membership", "milestone-contribution"],
         )
+        self.assertEqual(
+            resolve_dispatch_fail_on_policy({"mode": "dispatch-eligible-work-v1"}),
+            {
+                "truncation": True,
+                "unresolvedEvidence": True,
+                "validation": True,
+                "warning": True,
+            },
+        )
 
     def test_dispatch_scope_policy_prefers_authority_and_can_use_fallback(self) -> None:
         self._write_dispatch_scope_policy({
@@ -1917,6 +1934,109 @@ class QueryTraverseTests(unittest.TestCase):
             receipt["incompleteEvidence"][0]["itemId"],
             "dispatch-incomplete",
         )
+
+    def test_dispatch_can_exclude_incomplete_evidence_without_hiding_complete_candidates(self) -> None:
+        self._write_dispatch_fail_on({
+            "truncation": True,
+            "validation": True,
+            "warning": True,
+            "unresolvedEvidence": False,
+        })
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(
+                connection,
+                "dispatch-complete",
+                "ITEM-COMPLETE",
+                "task",
+                self._ready_dispatch_fields(),
+            )
+            self._insert(connection, "dispatch-partial", "ITEM-PARTIAL", "task", {
+                "title": "Incomplete packet",
+                "status": "ready",
+                "packetRevision": "revision-1",
+            })
+            for item_id, relationship_id in (
+                ("dispatch-complete", "REL-COMPLETE"),
+                ("dispatch-partial", "REL-PARTIAL"),
+            ):
+                self._link(
+                    connection,
+                    f"{item_id}-membership",
+                    relationship_id,
+                    item_id,
+                    "launch-1",
+                    "part-of-launch",
+                    scope_role="core",
+                )
+            connection.commit()
+
+        request = {
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        }
+        first = self.reader.traverse_graph(request)
+        second = self.reader.traverse_graph(request)
+
+        self.assertEqual([node["id"] for node in first["nodes"]], ["dispatch-complete"])
+        self.assertEqual(first["page"]["candidateCount"], 1)
+        self.assertEqual(first["launchTotals"], {"launch-1": 1})
+        self.assertEqual(first["validation"]["state"], "pass")
+        self.assertIn("generatedAt", first["watermark"])
+        self.assertFalse(first["query"]["failOn"]["unresolvedEvidence"])
+        self.assertEqual(first["query"]["unresolvedEvidenceDisposition"], "exclude-row")
+        self.assertEqual(first["admission"]["incompleteEvidenceCount"], 1)
+        receipts = {receipt["itemId"]: receipt for receipt in first["receipts"]}
+        self.assertTrue(receipts["dispatch-complete"]["included"])
+        self.assertEqual(
+            receipts["dispatch-complete"]["evidenceCompleteness"]["state"],
+            "complete",
+        )
+        self.assertFalse(receipts["dispatch-partial"]["included"])
+        self.assertEqual(
+            receipts["dispatch-partial"]["evidenceCompleteness"]["state"],
+            "incomplete",
+        )
+        self.assertIn(
+            "qaStatus",
+            receipts["dispatch-partial"]["evidenceCompleteness"]["missingLogicalSignals"],
+        )
+        self.assertEqual(
+            [entry["itemId"] for entry in first["excluded"]],
+            ["dispatch-partial"],
+        )
+        self.assertEqual(first["nodes"], second["nodes"])
+        self.assertEqual(first["receipts"], second["receipts"])
+        self.assertEqual(first["launchTotals"], second["launchTotals"])
+        self.assertEqual(
+            first["query"]["queryFingerprint"],
+            second["query"]["queryFingerprint"],
+        )
+
+        self._write_dispatch_fail_on({
+            "truncation": True,
+            "validation": True,
+            "warning": True,
+            "unresolvedEvidence": True,
+        })
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph(request)
+        self.assertEqual(raised.exception.code, "DISPATCH_EVIDENCE_INCOMPLETE")
+        self.assertEqual(raised.exception.details["receipt"]["candidates"], [])
+
+    def test_dispatch_rejects_non_boolean_unresolved_evidence_policy(self) -> None:
+        self._write_dispatch_fail_on({"unresolvedEvidence": "false"})
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "savedQuery": {"id": "dispatch-eligible-work-v1", "params": {}},
+            })
+
+        self.assertEqual(raised.exception.code, "QUERY_INVALID")
+        self.assertEqual(raised.exception.details["path"], "definition.failOn")
 
     def test_dispatch_role_attention_tag_reaches_detailed_receipt(self) -> None:
         self._write_registry_override({

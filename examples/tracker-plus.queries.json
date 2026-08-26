@@ -24,7 +24,7 @@
       }
     },
     "dispatch-eligible-work-v1": {
-      "version": 2,
+      "version": 3,
       "kind": "traversal",
       "params": [],
       "optionalParams": ["roleId", "rootKeys", "launchKeys", "includeUnscoped"],
