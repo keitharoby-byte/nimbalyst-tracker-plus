@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.14.0 - 2026-08-26
+
+- Restore boolean `page.hasMore` across predicate, composed, dispatch, and
+  standard/paged traversal envelopes. It is derived from the same continuation
+  decision as `page.nextCursor` and `page.continuationRequired`, including
+  first, middle, terminal, empty, and response-trimmed pages. (#42)
+- Exclude archived item rows from inline relationship synthesis so historical
+  `collection` values cannot enter active authoritative dispatch scope.
+  Explicitly stored active relationships retain unavailable-endpoint
+  validation and continue to fail closed. (#43)
+
 ## 0.13.0 - 2026-08-26
 
 - Select rooted membership from the native root type: launches use

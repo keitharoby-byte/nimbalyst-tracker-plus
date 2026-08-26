@@ -150,6 +150,16 @@ class QueryTraverseTests(unittest.TestCase):
             "survivor": "unique",
         }
 
+    def _assert_graph_page_signals(self, page: dict[str, object]) -> None:
+        self.assertIsInstance(page.get("hasMore"), bool)
+        has_more = page["nextCursor"] is not None
+        self.assertEqual(page["hasMore"], has_more)
+        self.assertEqual(page["continuationRequired"], has_more)
+        self.assertEqual(
+            page["resultsComplete"],
+            not has_more and not bool(page.get("truncated")),
+        )
+
     def test_saved_role_query_and_parameterized_sql_value(self) -> None:
         result = self.reader.query_items({"workspacePath": self.workspace, "savedQuery": {"id": "role-active-work-and-attention", "params": {"roleId": "coordinator"}}})
         self.assertEqual([node["id"] for node in result["nodes"]], ["launch-1", "member-1"])
@@ -415,10 +425,49 @@ class QueryTraverseTests(unittest.TestCase):
             },
         })
 
+        self._assert_graph_page_signals(result["page"])
         self.assertEqual([node["id"] for node in result["nodes"]], ["workspace-composed-root"])
         self.assertEqual([node["id"] for node in result["boundaryNodes"]], ["prior"])
         self.assertEqual([edge["id"] for edge in result["edges"]], ["workspace-composed-edge"])
         self.assertTrue(result["query"]["selection"]["complete"])
+
+    def test_empty_composed_traversal_has_terminal_page_signals(self) -> None:
+        (Path(self.workspace) / ".nimbalyst" / "tracker-plus.queries.json").write_text(
+            json.dumps({
+                "version": 1,
+                "queries": {
+                    "empty-composed": {
+                        "version": 1,
+                        "kind": "composed",
+                        "params": [],
+                        "definition": {
+                            "mode": "composed-v1",
+                            "select": {
+                                "where": {
+                                    "field": "id",
+                                    "op": "eq",
+                                    "value": "absent-root",
+                                },
+                                "limit": 1,
+                            },
+                            "traverse": {},
+                            "failOn": {"truncation": True, "validation": False},
+                        },
+                    },
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {"id": "empty-composed", "params": {}},
+        })
+
+        self.assertEqual(result["nodes"], [])
+        self._assert_graph_page_signals(result["page"])
+        self.assertFalse(result["page"]["hasMore"])
+        self.assertTrue(result["page"]["resultsComplete"])
 
     def test_walk_readiness_is_not_injected_or_required(self) -> None:
         with self.assertRaises(ReaderError) as raised:
@@ -448,6 +497,41 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(len(ids), first["page"]["totalCount"])
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_query_page_signals_cover_first_middle_terminal_and_empty_pages(self) -> None:
+        params = {
+            "workspacePath": self.workspace,
+            "where": {"field": "issueKey", "op": "exists", "value": True},
+            "sort": [{"field": "id", "direction": "asc"}],
+            "limit": 100,
+        }
+        pages: list[dict[str, object]] = []
+        cursor: str | None = None
+        for _page_number in range(10):
+            result = self.reader.query_items({
+                **params,
+                **({"cursor": cursor} if cursor else {}),
+            })
+            self._assert_graph_page_signals(result["page"])
+            pages.append(result["page"])
+            cursor = result["page"]["nextCursor"]
+            if cursor is None:
+                break
+        else:
+            self.fail("query cursor continuation did not terminate")
+
+        self.assertGreaterEqual(len(pages), 3)
+        self.assertTrue(pages[0]["hasMore"])
+        self.assertTrue(pages[1]["hasMore"])
+        self.assertFalse(pages[-1]["hasMore"])
+
+        empty = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "id", "op": "eq", "value": "absent-item"},
+        })
+        self._assert_graph_page_signals(empty["page"])
+        self.assertFalse(empty["page"]["hasMore"])
+        self.assertTrue(empty["page"]["resultsComplete"])
+
     def test_query_response_truncation_can_be_fully_retrieved_by_cursor(self) -> None:
         params = {
             "workspacePath": self.workspace,
@@ -470,11 +554,7 @@ class QueryTraverseTests(unittest.TestCase):
                 ids.extend(node["id"] for node in result["nodes"])
                 saw_response_truncation = saw_response_truncation or result["page"]["responseTruncated"]
                 cursor = result["page"]["nextCursor"]
-                self.assertEqual(result["page"]["continuationRequired"], cursor is not None)
-                self.assertEqual(
-                    result["page"]["resultsComplete"],
-                    cursor is None and not result["page"]["truncated"],
-                )
+                self._assert_graph_page_signals(result["page"])
                 if not result["page"]["continuationRequired"]:
                     break
             else:
@@ -1280,7 +1360,7 @@ class QueryTraverseTests(unittest.TestCase):
             )
             edge_ids.extend(edge["id"] for edge in page["edges"])
             cursor = page["page"]["nextCursor"]
-            self.assertEqual(page["page"]["continuationRequired"], cursor is not None)
+            self._assert_graph_page_signals(page["page"])
             if not page["page"]["continuationRequired"]:
                 self.assertTrue(page["page"]["resultsComplete"])
                 break
@@ -1693,6 +1773,79 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(second_receipt["scopeFingerprint"], first_scope_fingerprint)
         self.assertEqual(second_receipt["evidence"], first_evidence)
 
+    def test_archived_inline_collection_members_do_not_poison_dispatch_scope(self) -> None:
+        self._write_dispatch_scope_policy({
+            "version": 1,
+            "rootTypes": ["release", "milestone"],
+            "implicitRootSelection": "all-eligible",
+            "ancestryDepth": 2,
+            "mechanisms": [{
+                "id": "collection-membership",
+                "relationshipType": "in-collection",
+                "direction": "outgoing",
+                "authority": "authoritative",
+            }],
+        })
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "scope-release", "ROOT-RELEASE", "release", {
+                "title": "Release root", "status": "active", "targetDate": "2026-10-01",
+            })
+            self._insert(connection, "scope-milestone", "ROOT-MILESTONE", "milestone", {
+                "title": "Milestone root", "status": "active", "targetDate": "2026-09-15",
+            })
+            self._insert(connection, "current-scope-packet", "PACKET-CURRENT", "task", {
+                **self._ready_dispatch_fields(),
+                "collection": {"itemId": "scope-release"},
+            })
+            for item_type in ("task", "bug", "plan"):
+                for container_id in ("scope-release", "scope-milestone"):
+                    item_id = f"archived-{item_type}-{container_id}"
+                    self._insert(connection, item_id, f"ARCHIVED-{item_type}-{container_id}", item_type, {
+                        "title": f"Archived {item_type}",
+                        "status": "active",
+                        "collection": {"itemId": container_id},
+                    })
+                    connection.execute(
+                        "UPDATE tracker_items SET archived=1 WHERE id=?",
+                        (item_id,),
+                    )
+            connection.commit()
+
+        request = {
+            "workspacePath": self.workspace,
+            "savedQuery": {"id": "dispatch-eligible-work-v1", "params": {}},
+        }
+        result = self.reader.traverse_graph(request)
+        self._assert_graph_page_signals(result["page"])
+        current = next(
+            receipt for receipt in result["receipts"]
+            if receipt["itemId"] == "current-scope-packet"
+        )
+        self.assertTrue(current["included"])
+        self.assertEqual(current["scopeMechanismIds"], ["collection-membership"])
+        self.assertNotIn(
+            "archived-",
+            json.dumps({"edges": result["edges"], "receipts": result["receipts"]}),
+        )
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._link(
+                connection,
+                "missing-active-membership",
+                "REL-MISSING-ACTIVE",
+                "missing-active-item",
+                "scope-release",
+                "in-collection",
+            )
+            connection.commit()
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph(request)
+        self.assertEqual(raised.exception.code, "UNRESOLVED_EDGE")
+        self.assertEqual(
+            raised.exception.details["relationshipId"],
+            "missing-active-membership",
+        )
+
     def test_dispatch_scope_policy_preserves_legacy_defaults_when_omitted(self) -> None:
         policy = resolve_dispatch_scope_policy(
             {"mode": "dispatch-eligible-work-v1"},
@@ -2003,6 +2156,7 @@ class QueryTraverseTests(unittest.TestCase):
             "DISPATCH_EVIDENCE_INCOMPLETE",
         )
         receipt = raised.exception.details["receipt"]
+        self._assert_graph_page_signals(receipt["page"])
         self.assertEqual(receipt["candidates"], [])
         self.assertNotIn("launchTotals", receipt)
         self.assertNotIn("totalCount", receipt["page"])

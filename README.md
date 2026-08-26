@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.13.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.14.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,19 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.13.0
+## What's new in 0.14.0
+
+Query and traversal pages now expose `page.hasMore` everywhere and derive it
+from the same cursor decision as `continuationRequired`. First, middle,
+terminal, empty, response-trimmed, composed, dispatch, and paged traversal
+responses therefore present one consistent completeness contract.
+
+Archived items no longer synthesize active inline collection relationships.
+Historical collection values cannot block current authoritative dispatch
+scope, while an explicitly stored active relationship with an unavailable
+endpoint continues to fail closed. (#42, #43)
+
+## Previously in 0.13.0
 
 Rooted timeline sync now selects membership according to the native root type.
 Launches use `part-of-launch`; milestones and releases use `in-collection`.

@@ -166,7 +166,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
   },
   {
     name: TOOL_QUERY,
-    description: 'Run a bounded, cursor-paged predicate or saved query over current-workspace native tracker items. Completeness contract: when page.continuationRequired is true, automatically repeat the identical query with cursor=page.nextCursor and aggregate every page until continuationRequired is false, unless the user explicitly requested only one page. A truncated page is not a complete result. Relationship records are excluded unless explicitly requested. This tool never writes tracker data.',
+    description: 'Run a bounded, cursor-paged predicate or saved query over current-workspace native tracker items. Completeness contract: page.hasMore and page.continuationRequired are identical booleans derived from page.nextCursor. When true, automatically repeat the identical query with cursor=page.nextCursor and aggregate every page until both are false, unless the user explicitly requested only one page. A truncated page is not a complete result. Relationship records are excluded unless explicitly requested. This tool never writes tracker data.',
     scope: 'global',
     inputSchema: {
       type: 'object',
@@ -185,7 +185,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
   },
   {
     name: TOOL_TRAVERSE,
-    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved query. If a standard traversal returns RESULT_TRUNCATED, retry the identical request with paginate=true; then automatically repeat it with cursor=page.nextCursor and aggregate nodes, boundaryNodes, and edges until page.continuationRequired is false. Never interpret one paged fragment as the complete graph. Dispatch and composed modes remain fail closed and do not support pagination. This tool never writes tracker data.',
+    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved query. If a standard traversal returns RESULT_TRUNCATED, retry the identical request with paginate=true; then automatically repeat it with cursor=page.nextCursor and aggregate nodes, boundaryNodes, and edges until page.hasMore and page.continuationRequired are both false. Both booleans are derived from page.nextCursor. Never interpret one paged fragment as the complete graph. Dispatch and composed modes remain fail closed and do not support pagination. This tool never writes tracker data.',
     scope: 'global',
     inputSchema: {
       type: 'object',

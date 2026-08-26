@@ -30,7 +30,8 @@ backends disabled until the user approves their first-use native-code prompts.
 - Query and traversal envelopes apply the same identity allowlist and exclude
   deleted records. Archived records require an explicit query flag; traversal
   retains archived evidence only on active `evidences` edges with an effective
-  revision.
+  revision. Archived item rows never synthesize active inline relationships;
+  explicitly stored active relationships keep unavailable-endpoint validation.
 - Workspace policy overrides are read only from
   `.nimbalyst/tracker-plus.registry.json`; saved-query catalog overrides are
   read only from `.nimbalyst/tracker-plus.queries.json`. Both are validated

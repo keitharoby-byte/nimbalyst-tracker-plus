@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.13.0. This document describes only the
+Accepted; amended for Tracker+ 0.14.0. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -41,6 +41,11 @@ selected duplicates produce deterministic findings.
 Traversal excludes retired, archived, filtered, and out-of-boundary evidence
 before duplicate validation. Current endpoint rows override stale embedded
 metadata. Unresolved selected roots or endpoints are terminal.
+
+Inline relationships are synthesized only from active item rows. An archived
+item's retained inline fields are historical data and never become active graph
+edges. Explicit stored relationship rows remain independently authoritative;
+an active stored edge with an unavailable endpoint still fails closed.
 
 Rooted timeline projections derive membership from the registered root type.
 Launch roots use active incoming `part-of-launch`; milestone and release roots
@@ -126,6 +131,10 @@ atomic and fail closed instead of paging.
 Receipts include pagination/truncation, validation, resolved roots, boundary
 rules, schema adapter/fingerprint, registry version/hash, watermark, expanded
 parameters, and query fingerprint.
+
+Every query and traversal page includes boolean `hasMore`. It is true exactly
+when `nextCursor` is non-null and is identical to `continuationRequired`.
+`resultsComplete` is true only when `hasMore` and `truncated` are both false.
 
 ### Dispatch fails closed
 

@@ -137,7 +137,9 @@ Direct predicates use `all`, `any`, `not`, or a field clause:
 `page.nextCursor` from the same query and sort. When
 `page.continuationRequired` is true, repeat the identical request with that
 cursor and aggregate the pages until it is false. Do this automatically unless
-the user explicitly requested only one page. `page.resultsComplete` is true
+the user explicitly requested only one page. `page.hasMore` is the same boolean
+as `page.continuationRequired`; both are derived from whether `page.nextCursor`
+is present. `page.resultsComplete` is true
 only when the result set is complete; a response-size-truncated page remains
 continuable without weakening the response cap. `includeArchived` and
 `includeRelationshipRecords` default to false. Results place items in `nodes`;
@@ -205,7 +207,8 @@ If a standard traversal returns `RESULT_TRUNCATED`, repeat the identical call
 with `paginate: true`. In that mode `limits.maxNodes` and `limits.maxEdges` are
 safe page sizes. Aggregate `nodes`, `boundaryNodes`, and `edges`, following each
 opaque `page.nextCursor` until `page.continuationRequired` is false and
-`page.resultsComplete` is true. Do not interpret an individual fragment as a
+`page.hasMore` is false, then require `page.resultsComplete` to be true. Do not
+interpret an individual fragment as a
 complete graph. Cursors are bound to the selected graph and fail with
 `CURSOR_INVALID` if its node or edge identity changes between pages. Dispatch
 and composed traversal modes remain atomic and fail closed; they do not support
@@ -833,7 +836,9 @@ reader synthesizes a native, non-legacy `in-collection` edge from it
 automatically — so prefer the inline field and reserve explicit
 `timeline-link` rows of these types for cases the inline field cannot
 express. Neither type carries `scopeRole`, `contributionRole`, or
-`hardness`, and neither blocks.
+`hardness`, and neither blocks. Archived items do not synthesize inline
+relationships; a retained collection value on an archived row is historical
+rather than active graph evidence.
 
 Additional controls:
 

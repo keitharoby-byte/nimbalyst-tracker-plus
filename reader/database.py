@@ -934,6 +934,7 @@ class NativeTrackerReader:
             "page": {
                 "totalCount": total_count,
                 "returnedCount": len(page_rows),
+                "hasMore": has_more,
                 "nextCursor": encode_cursor(sort, str(page_rows[-1]["id"])) if has_more and page_rows else None,
                 "truncated": False,
                 "resultsComplete": not has_more,
@@ -1300,6 +1301,7 @@ class NativeTrackerReader:
                     "totalEdgeCount": len(edge_stream),
                     "returnedCount": len(node_page),
                     "returnedEdgeCount": len(edge_page),
+                    "hasMore": False,
                     "nextCursor": None,
                     "truncated": False,
                     "resultsComplete": False,
@@ -1459,8 +1461,12 @@ class NativeTrackerReader:
                 "page": {
                     "totalCount": 0,
                     "returnedCount": 0,
+                    "hasMore": False,
                     "nextCursor": None,
                     "truncated": False,
+                    "resultsComplete": True,
+                    "continuationRequired": False,
+                    "responseTruncated": False,
                 },
                 "validation": selection["validation"],
                 "watermark": selection["watermark"],
@@ -2239,7 +2245,14 @@ class NativeTrackerReader:
             "savedQuery": query_receipt["savedQuery"],
             "queryFingerprint": query_receipt["queryFingerprint"],
             "resolvedRoots": query_receipt["resolvedRoots"],
-            "page": {"truncated": False},
+            "page": {
+                "hasMore": False,
+                "nextCursor": None,
+                "truncated": False,
+                "resultsComplete": True,
+                "continuationRequired": False,
+                "responseTruncated": False,
+            },
             "validation": validation,
             "watermark": watermark,
             "candidates": [],
@@ -3623,6 +3636,8 @@ class NativeTrackerReader:
         }
         seen_symmetric: set[tuple[str, str, str]] = set()
         for item in items:
+            if item.get("archived"):
+                continue
             fields = raw_fields_by_id[item["id"]]
             for field, (relationship_type, reverse, hardness, legacy) in inline_specs.items():
                 for target in self._relationship_targets(fields.get(field)):
@@ -4721,6 +4736,7 @@ class NativeTrackerReader:
                     result["page"]["nextCursor"] = encode_cursor(sort, last_id)
         result["page"]["returnedCount"] = len(result["nodes"]) + len(result["boundaryNodes"])
         next_cursor = result["page"].get("nextCursor")
+        result["page"]["hasMore"] = next_cursor is not None
         result["page"]["resultsComplete"] = next_cursor is None and not result["page"].get("truncated", False)
         result["page"]["continuationRequired"] = next_cursor is not None
         if findings_trimmed:
@@ -4819,6 +4835,7 @@ class NativeTrackerReader:
                     if continuation_required
                     else None
                 ),
+                "hasMore": continuation_required,
                 "truncated": continuation_required,
                 "resultsComplete": not continuation_required,
                 "continuationRequired": continuation_required,
