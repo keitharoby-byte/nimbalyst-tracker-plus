@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.15.0 - 2026-08-26
+
+- Recover inline collection membership from bounded, deeply nested legacy
+  `customFields` envelopes. The closest value takes precedence, deeper values
+  only provide missing fields, cycles terminate safely, and duplicate
+  source/type/target tuples still emit one normalized relationship. (#44)
+- Preserve archived-row exclusion and fail-closed unavailable-endpoint
+  validation while advancing the packaged schema adapter to version 9.
+
 ## 0.14.0 - 2026-08-26
 
 - Restore boolean `page.hasMore` across predicate, composed, dispatch, and

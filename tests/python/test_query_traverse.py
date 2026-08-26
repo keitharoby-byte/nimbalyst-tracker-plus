@@ -1078,6 +1078,78 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertFalse(edge["legacy"])
         self.assertTrue(edge["id"].startswith("native-"))
 
+    def test_nested_custom_fields_preserve_nearest_collection_and_single_edge(self) -> None:
+        primary_target = [{"itemId": "nested-target-primary"}]
+        deeper_target = [{"itemId": "nested-target-deeper"}]
+        many_levels: dict[str, object] = {"collection": primary_target}
+        for _ in range(12):
+            many_levels = {"customFields": many_levels}
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(connection, "nested-target-primary", "M-NESTED-PRIMARY", "milestone", {
+                "title": "Primary nested target", "status": "active",
+            })
+            self._insert(connection, "nested-target-deeper", "M-NESTED-DEEPER", "milestone", {
+                "title": "Deeper nested target", "status": "active",
+            })
+            self._insert(connection, "nested-source-two", "ITEM-NESTED-TWO", "task", {
+                "title": "Two-level member", "status": "open",
+                "customFields": {"customFields": {"collection": primary_target}},
+            })
+            self._insert(connection, "nested-source-many", "ITEM-NESTED-MANY", "task", {
+                "title": "Many-level member", "status": "open", "customFields": many_levels,
+            })
+            self._insert(connection, "nested-source-conflict", "ITEM-NESTED-CONFLICT", "task", {
+                "title": "Conflicting member", "status": "open",
+                "customFields": {
+                    "collection": primary_target,
+                    "customFields": {"collection": deeper_target},
+                },
+            })
+            self._insert(connection, "nested-source-duplicate", "ITEM-NESTED-DUPLICATE", "task", {
+                "title": "Duplicate member", "status": "open",
+                "customFields": {
+                    "collection": primary_target,
+                    "customFields": {"collection": primary_target},
+                },
+            })
+            connection.commit()
+
+        expected_targets = {
+            "ITEM-NESTED-TWO": "nested-target-primary",
+            "ITEM-NESTED-MANY": "nested-target-primary",
+            "ITEM-NESTED-CONFLICT": "nested-target-primary",
+            "ITEM-NESTED-DUPLICATE": "nested-target-primary",
+        }
+        for issue_key, expected_target in expected_targets.items():
+            with self.subTest(issue_key=issue_key):
+                result = self.reader.traverse_graph({
+                    "workspacePath": self.workspace,
+                    "roots": [issue_key],
+                    "expand": {
+                        "relationshipTypes": ["in-collection"],
+                        "direction": "outgoing",
+                        "maxDepth": 1,
+                    },
+                })
+                edges = [edge for edge in result["edges"] if edge["relationshipType"] == "in-collection"]
+                self.assertEqual(len(edges), 1)
+                self.assertEqual(edges[0]["targetId"], expected_target)
+                self.assertNotEqual(edges[0]["targetId"], "M-NESTED-PRIMARY")
+
+    def test_custom_field_envelope_unwrap_is_cycle_safe_and_bounded(self) -> None:
+        cyclic: dict[str, object] = {"collection": {"itemId": "target"}}
+        cyclic["customFields"] = cyclic
+        flattened = self.reader._flatten_custom_fields({"customFields": cyclic})
+        self.assertEqual(flattened["collection"], {"itemId": "target"})
+
+        over_limit: dict[str, object] = {"collection": {"itemId": "target"}}
+        for _ in range(33):
+            over_limit = {"customFields": over_limit}
+        with self.assertRaises(ReaderError) as raised:
+            self.reader._flatten_custom_fields({"customFields": over_limit})
+        self.assertEqual(raised.exception.code, "CUSTOM_FIELDS_NESTING_EXCEEDED")
+
     def test_release_and_milestone_roots_default_to_in_collection_membership(self) -> None:
         self._insert_release_collection_fixture()
         release_walk = self.reader.traverse_graph({"workspacePath": self.workspace, "roots": ["REL-CONTAINER"]})

@@ -840,6 +840,12 @@ express. Neither type carries `scopeRole`, `contributionRole`, or
 relationships; a retained collection value on an archived row is historical
 rather than active graph evidence.
 
+For legacy rows, `collection` may appear inside multiple nested
+`customFields` mappings. The reader follows a cycle-safe chain of at most 32
+envelopes. The nearest value wins when levels conflict, while deeper levels
+only fill missing fields. Agents should continue writing the current flat
+inline field; nested handling is read compatibility, not a storage pattern.
+
 Additional controls:
 
 - Dependency modes: `finish-to-start`, `start-to-start`,

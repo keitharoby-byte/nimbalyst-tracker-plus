@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.14.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.15.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,15 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.14.0
+## What's new in 0.15.0
+
+Inline collection relationships are now recovered from deeply nested legacy
+`customFields` envelopes. The reader follows a bounded, cycle-safe chain,
+keeps the nearest value when levels conflict, and emits a single relationship
+for each stable source/type/target tuple. Archived rows and unavailable
+endpoints retain their existing fail-closed behavior. (#44)
+
+## Previously in 0.14.0
 
 Query and traversal pages now expose `page.hasMore` everywhere and derive it
 from the same cursor decision as `continuationRequired`. First, middle,

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.14.0. This document describes only the
+Accepted; amended for Tracker+ 0.15.0. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -46,6 +46,13 @@ Inline relationships are synthesized only from active item rows. An archived
 item's retained inline fields are historical data and never become active graph
 edges. Explicit stored relationship rows remain independently authoritative;
 an active stored edge with an unavailable endpoint still fails closed.
+
+Legacy inline fields may be wrapped in nested `customFields` mappings. The
+reader unwraps a bounded, cycle-safe chain for compatibility: top-level and
+nearer values take precedence, deeper values only fill missing keys, and the
+existing stable relationship tuple removes exact duplicates. Exceeding the
+nesting bound fails closed instead of silently dropping or partially trusting
+the relationship.
 
 Rooted timeline projections derive membership from the registered root type.
 Launch roots use active incoming `part-of-launch`; milestone and release roots

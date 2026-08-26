@@ -62,6 +62,9 @@ except ImportError:  # pragma: no cover - used when server.py runs as a script
     from traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage  # type: ignore[no-redef]
 
 
+MAX_CUSTOM_FIELDS_ENVELOPE_DEPTH = 32
+
+
 class NativeTrackerReader:
     """Open a fresh read-only SQLite connection for each bounded operation."""
 
@@ -3039,10 +3042,24 @@ class NativeTrackerReader:
     @staticmethod
     def _flatten_custom_fields(data: Mapping[str, Any]) -> dict[str, Any]:
         fields = dict(data)
-        custom = data.get("customFields")
-        if isinstance(custom, dict):
-            for key, value in custom.items():
+        current = data.get("customFields")
+        seen: set[int] = {id(data)}
+        depth = 0
+        while isinstance(current, Mapping):
+            identity = id(current)
+            if identity in seen:
+                break
+            if depth >= MAX_CUSTOM_FIELDS_ENVELOPE_DEPTH:
+                raise ReaderError(
+                    "CUSTOM_FIELDS_NESTING_EXCEEDED",
+                    "The tracker item's custom fields exceed the safe nesting limit.",
+                    {"maxDepth": MAX_CUSTOM_FIELDS_ENVELOPE_DEPTH},
+                )
+            seen.add(identity)
+            for key, value in current.items():
                 fields.setdefault(key, value)
+            current = current.get("customFields")
+            depth += 1
         return fields
 
     @staticmethod
