@@ -18,13 +18,28 @@ import { NativeTrackerError, safeErrorResult } from './errors';
 import { PythonBridge } from './pythonBridge';
 import { normalizeTimelineSelector, selectorSnapshotFailure } from './timeline/selector';
 import { prepareTimelineSync } from './timeline/sync';
+import {
+  CUSTOM_FIELDS_DEPTH_PROPERTY,
+  DEFAULT_CUSTOM_FIELDS_DEPTH,
+  helpedErrorPayload,
+  MAX_CUSTOM_FIELDS_DEPTH,
+} from './toolUsage';
 
 const COMMENT_ALLOWED_KEYS = new Set(['trackerId', 'limit', 'cursor', 'since', 'order']);
-const TIMELINE_ALLOWED_KEYS = new Set(['outputPath', 'includeUnscheduled', 'maxItems', 'from', 'to', 'launch', 'selector']);
-const REPORT_ALLOWED_KEYS = new Set(['outputPath', 'milestoneId', 'asOf', 'lookaheadDays', 'maxItems']);
-const QUERY_ALLOWED_KEYS = new Set(['where', 'savedQuery', 'sort', 'limit', 'cursor', 'includeArchived', 'includeRelationshipRecords', 'includeTotalCount']);
-const TRAVERSE_ALLOWED_KEYS = new Set(['roots', 'membership', 'expand', 'nodeWhere', 'limits', 'failOn', 'savedQuery', 'paginate', 'cursor']);
+const TIMELINE_ALLOWED_KEYS = new Set(['outputPath', 'includeUnscheduled', 'maxItems', 'from', 'to', 'launch', 'selector', 'maxCustomFieldsDepth']);
+const REPORT_ALLOWED_KEYS = new Set(['outputPath', 'milestoneId', 'asOf', 'lookaheadDays', 'maxItems', 'maxCustomFieldsDepth']);
+const QUERY_ALLOWED_KEYS = new Set(['where', 'savedQuery', 'sort', 'limit', 'cursor', 'includeArchived', 'includeRelationshipRecords', 'includeTotalCount', 'maxCustomFieldsDepth']);
+const TRAVERSE_ALLOWED_KEYS = new Set(['roots', 'membership', 'expand', 'nodeWhere', 'limits', 'failOn', 'savedQuery', 'paginate', 'cursor', 'maxCustomFieldsDepth']);
 const MAX_EXISTING_TIMELINE_BYTES = 1024 * 1024;
+
+const READER_TOOL_BY_METHOD: Record<ReaderMethod, string> = {
+  list_comments: TOOL_LIST_COMMENTS,
+  get_with_comments: TOOL_GET_WITH_COMMENTS,
+  timeline_snapshot: TOOL_SYNC_TIMELINE,
+  milestone_report: TOOL_MILESTONE_REPORT,
+  query_items: TOOL_QUERY,
+  traverse_graph: TOOL_TRAVERSE,
+};
 
 const PAGINATION_PROPERTIES = {
   trackerId: {
@@ -95,6 +110,7 @@ const TIMELINE_PROPERTIES = {
     required: ['launchTags'],
     additionalProperties: false,
   },
+  maxCustomFieldsDepth: CUSTOM_FIELDS_DEPTH_PROPERTY,
 };
 
 const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
@@ -160,6 +176,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
           description: 'Maximum tracker items to scan. Defaults to 500 and is capped at 500.',
           default: 500,
         },
+        maxCustomFieldsDepth: TIMELINE_PROPERTIES.maxCustomFieldsDepth,
       },
       additionalProperties: false,
     },
@@ -179,6 +196,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
         includeArchived: { type: 'boolean', default: false },
         includeRelationshipRecords: { type: 'boolean', default: false },
         includeTotalCount: { type: 'boolean', default: true },
+        maxCustomFieldsDepth: TIMELINE_PROPERTIES.maxCustomFieldsDepth,
       },
       additionalProperties: false,
     },
@@ -199,6 +217,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
         savedQuery: { type: 'object' },
         paginate: { type: 'boolean', default: false, description: 'For standard traversals, treat maxNodes and maxEdges as safe page sizes and expose an opaque continuation cursor instead of failing on truncation.' },
         cursor: { type: 'string', description: 'Opaque page.nextCursor from the preceding paged traversal. Keep every other argument identical.' },
+        maxCustomFieldsDepth: TIMELINE_PROPERTIES.maxCustomFieldsDepth,
       },
       additionalProperties: false,
     },
@@ -227,6 +246,23 @@ function rejectUnknown(raw: Record<string, unknown>, allowed: Set<string>): void
       message: `Unknown parameter(s): ${unknown.join(', ')}. Database and workspace paths cannot be supplied by callers.`,
     });
   }
+}
+
+function validatedMaxCustomFieldsDepth(params: Record<string, unknown>): number {
+  const value = params.maxCustomFieldsDepth ?? DEFAULT_CUSTOM_FIELDS_DEPTH;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_CUSTOM_FIELDS_DEPTH) {
+    throw new NativeTrackerError({
+      code: 'INVALID_PARAMS',
+      message: `maxCustomFieldsDepth must be an integer from 1 through ${MAX_CUSTOM_FIELDS_DEPTH}.`,
+    });
+  }
+  return value;
+}
+
+function safeToolError(error: unknown, toolName: string): ReturnType<typeof safeErrorResult> {
+  const result = safeErrorResult(error);
+  result.error = helpedErrorPayload(result.error, toolName);
+  return result;
 }
 
 function validatedCommentParams(
@@ -271,6 +307,7 @@ function validatedTimelineParams(
   ensureWorkspace(workspacePath);
   const includeUnscheduled = params.includeUnscheduled ?? true;
   const maxItems = params.maxItems ?? 300;
+  const maxCustomFieldsDepth = validatedMaxCustomFieldsDepth(params);
   if (typeof includeUnscheduled !== 'boolean') {
     throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'includeUnscheduled must be a boolean.' });
   }
@@ -301,6 +338,7 @@ function validatedTimelineParams(
     workspacePath,
     includeUnscheduled,
     maxItems,
+    maxCustomFieldsDepth,
     outputPath: validatedOutputName(params.outputPath, 'Tracker Timeline.ntimeline', '.ntimeline'),
     ...(params.from ? { from: params.from } : {}),
     ...(params.to ? { to: params.to } : {}),
@@ -318,6 +356,7 @@ function validatedReportParams(
   ensureWorkspace(workspacePath);
   const lookaheadDays = params.lookaheadDays ?? 30;
   const maxItems = params.maxItems ?? 500;
+  const maxCustomFieldsDepth = validatedMaxCustomFieldsDepth(params);
   if (typeof lookaheadDays !== 'number' || !Number.isInteger(lookaheadDays) || lookaheadDays < 1 || lookaheadDays > 365) {
     throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'lookaheadDays must be an integer from 1 through 365.' });
   }
@@ -334,6 +373,7 @@ function validatedReportParams(
     outputPath: validatedOutputName(params.outputPath, 'Milestone Report.md', '.md'),
     lookaheadDays,
     maxItems,
+    maxCustomFieldsDepth,
     ...(typeof params.milestoneId === 'string' ? { milestoneId: params.milestoneId.trim() } : {}),
     ...(typeof params.asOf === 'string' ? { asOf: params.asOf.trim() } : {}),
   };
@@ -349,6 +389,7 @@ function validatedGraphParams(
   ensureWorkspace(workspacePath);
   const hasSaved = params.savedQuery !== undefined;
   const hasDirect = kind === 'query' ? params.where !== undefined : params.roots !== undefined;
+  const maxCustomFieldsDepth = validatedMaxCustomFieldsDepth(params);
   if (hasSaved === hasDirect) {
     throw new NativeTrackerError({
       code: 'INVALID_PARAMS',
@@ -383,7 +424,7 @@ function validatedGraphParams(
       throw new NativeTrackerError({ code: 'INVALID_PARAMS', message: 'cursor requires paginate=true and an opaque non-empty cursor.' });
     }
   }
-  return { ...params, workspacePath };
+  return { ...params, maxCustomFieldsDepth, workspacePath };
 }
 
 function validatedOutputName(raw: unknown, fallback: string, extension: string): string {
@@ -483,7 +524,7 @@ export async function activateBackend(context: BackendContext, family: BackendFa
       log('info', `[tracker-plus] tool.${method} durationMs=${Date.now() - started}`);
       return result;
     } catch (error) {
-      const safe = safeErrorResult(error);
+      const safe = safeToolError(error, READER_TOOL_BY_METHOD[method]);
       log('error', `[tracker-plus] tool.error method=${method} code=${safe.error.code} durationMs=${Date.now() - started}`);
       return safe;
     }
@@ -493,7 +534,7 @@ export async function activateBackend(context: BackendContext, family: BackendFa
     try {
       return await callReader(method, validatedCommentParams(raw, workspacePath));
     } catch (error) {
-      return safeErrorResult(error);
+      return safeToolError(error, READER_TOOL_BY_METHOD[method]);
     }
   };
 
@@ -501,7 +542,7 @@ export async function activateBackend(context: BackendContext, family: BackendFa
     try {
       return await callReader(method, validatedGraphParams(raw, workspacePath, method === 'query_items' ? 'query' : 'traverse'));
     } catch (error) {
-      return safeErrorResult(error);
+      return safeToolError(error, READER_TOOL_BY_METHOD[method]);
     }
   };
 
@@ -544,7 +585,7 @@ export async function activateBackend(context: BackendContext, family: BackendFa
         source: prepared.snapshot.source,
       };
     } catch (error) {
-      return safeErrorResult(error);
+      return safeToolError(error, TOOL_SYNC_TIMELINE);
     }
   };
 
@@ -566,7 +607,7 @@ export async function activateBackend(context: BackendContext, family: BackendFa
         source: report.source,
       };
     } catch (error) {
-      return safeErrorResult(error);
+      return safeToolError(error, TOOL_MILESTONE_REPORT);
     }
   };
 

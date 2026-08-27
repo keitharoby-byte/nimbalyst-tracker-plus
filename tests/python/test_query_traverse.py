@@ -1082,7 +1082,7 @@ class QueryTraverseTests(unittest.TestCase):
         primary_target = [{"itemId": "nested-target-primary"}]
         deeper_target = [{"itemId": "nested-target-deeper"}]
         many_levels: dict[str, object] = {"collection": primary_target}
-        for _ in range(12):
+        for _ in range(40):
             many_levels = {"customFields": many_levels}
 
         with closing(sqlite3.connect(self.db_path)) as connection:
@@ -1137,6 +1137,53 @@ class QueryTraverseTests(unittest.TestCase):
                 self.assertEqual(edges[0]["targetId"], expected_target)
                 self.assertNotEqual(edges[0]["targetId"], "M-NESTED-PRIMARY")
 
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.traverse_graph({
+                "workspacePath": self.workspace,
+                "roots": ["ITEM-NESTED-MANY"],
+                "maxCustomFieldsDepth": 16,
+            })
+        self.assertEqual(raised.exception.code, "CUSTOM_FIELDS_NESTING_EXCEEDED")
+        self.assertEqual(raised.exception.details["maxDepth"], 16)
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.query_items({
+                "workspacePath": self.workspace,
+                "where": {"field": "issueKey", "op": "eq", "value": "ITEM-NESTED-MANY"},
+                "maxCustomFieldsDepth": 16,
+            })
+        self.assertEqual(raised.exception.code, "CUSTOM_FIELDS_NESTING_EXCEEDED")
+
+        timeline = self.reader.timeline_snapshot({
+            "workspacePath": self.workspace,
+            "includeUnscheduled": True,
+            "maxItems": 300,
+            "maxCustomFieldsDepth": 64,
+        })
+        self.assertEqual(timeline["source"]["maxCustomFieldsDepth"], 64)
+        report = self.reader.milestone_report({
+            "workspacePath": self.workspace,
+            "maxItems": 300,
+            "maxCustomFieldsDepth": 64,
+        })
+        self.assertEqual(report["source"]["maxCustomFieldsDepth"], 64)
+
+        deep_result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["ITEM-NESTED-MANY"],
+            "expand": {
+                "relationshipTypes": ["in-collection"],
+                "direction": "outgoing",
+                "maxDepth": 1,
+            },
+            "maxCustomFieldsDepth": 64,
+        })
+        self.assertEqual(deep_result["query"]["maxCustomFieldsDepth"], 64)
+        self.assertEqual(
+            [edge["targetId"] for edge in deep_result["edges"] if edge["relationshipType"] == "in-collection"],
+            ["nested-target-primary"],
+        )
+
     def test_custom_field_envelope_unwrap_is_cycle_safe_and_bounded(self) -> None:
         cyclic: dict[str, object] = {"collection": {"itemId": "target"}}
         cyclic["customFields"] = cyclic
@@ -1144,11 +1191,21 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(flattened["collection"], {"itemId": "target"})
 
         over_limit: dict[str, object] = {"collection": {"itemId": "target"}}
-        for _ in range(33):
+        for _ in range(129):
             over_limit = {"customFields": over_limit}
         with self.assertRaises(ReaderError) as raised:
             self.reader._flatten_custom_fields({"customFields": over_limit})
         self.assertEqual(raised.exception.code, "CUSTOM_FIELDS_NESTING_EXCEEDED")
+        self.assertEqual(raised.exception.details["maxDepth"], 128)
+
+        for invalid_depth in (0, 513, True, "64"):
+            with self.subTest(invalid_depth=invalid_depth), self.assertRaises(ReaderError) as raised:
+                self.reader.traverse_graph({
+                    "workspacePath": self.workspace,
+                    "roots": ["M-ALPHA"],
+                    "maxCustomFieldsDepth": invalid_depth,
+                })
+            self.assertEqual(raised.exception.code, "INVALID_PARAMS")
 
     def test_release_and_milestone_roots_default_to_in_collection_membership(self) -> None:
         self._insert_release_collection_fixture()

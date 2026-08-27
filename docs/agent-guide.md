@@ -56,6 +56,14 @@ For launch work, after installing or defining a workspace query catalog, begin
 with the fail-closed `launch-scope` saved traversal,
 then use a role query for the operator's nonterminal work and attention tags.
 
+### Self-guiding parameter errors
+
+Incomplete, conflicting, cursor-invalid, over-complex, and legacy-depth calls
+return their stable error code plus `error.details.usage`. The usage block
+names the tool, lists required or mutually exclusive arguments and relevant
+bounds, and includes one valid generic example. Correct the named parameter;
+do not infer a workspace or database path from the example.
+
 ## `native_tracker_get_with_comments`
 
 Use this as the default orientation call before changing one item. It returns
@@ -146,6 +154,10 @@ continuable without weakening the response cap. `includeArchived` and
 requested `timeline-link` records appear only in `edges`. Always inspect the
 validation and watermark blocks.
 
+`maxCustomFieldsDepth` defaults to 128 and may be set from 1 through 512 when
+legacy fields are stored in deeper envelopes. It controls storage
+compatibility only and is echoed under `query`; it does not broaden the query.
+
 Predicate validation is query-local. `query.validationScope` declares the
 selected-node, context-node, relationship, and boundary-endpoint counts plus a
 deterministic fingerprint. A non-launch result is not affected by launch
@@ -202,6 +214,10 @@ The traversal watermark carries the same `schemaDiscovery` receipt as queries.
 The query receipt also includes resolved roots, boundary rules, limits,
 declared `failOn` behavior, and a deterministic `queryFingerprint`. Timeline
 projections persist schema discovery under `snapshot.source` for UI review.
+
+`maxCustomFieldsDepth` defaults to 128 and may be set from 1 through 512. It is
+not the same as `membership.maxDepth` or `expand.maxDepth`: the former unwraps
+legacy storage envelopes, while the stage values bound graph topology.
 
 If a standard traversal returns `RESULT_TRUNCATED`, repeat the identical call
 with `paginate: true`. In that mode `limits.maxNodes` and `limits.maxEdges` are
@@ -608,6 +624,10 @@ relationship types, scope roles, executable types, caps, or registry version.
   or reference an unregistered role.
 - `ROOT_NOT_FOUND` / `ROOT_AMBIGUOUS`: a traversal root cannot be resolved
   uniquely in the current workspace.
+- `CUSTOM_FIELDS_NESTING_EXCEEDED`: a row contains more legacy storage
+  envelopes than this call permits. Retry with a larger
+  `maxCustomFieldsDepth` from the returned usage block, up to 512; do not
+  change relationship-stage `maxDepth` for this error.
 - `RESULT_TRUNCATED`: a fail-closed traversal exceeded its node or edge cap.
 - `VALIDATION_FAILED`: a declared traversal validation condition was met, or a
   dispatch run contained any warning/error finding. Dispatch details contain a
@@ -637,6 +657,7 @@ title, view settings, and state filters.
   "outputPath": "planning/Tracker Timeline.ntimeline",
   "includeUnscheduled": true,
   "maxItems": 500,
+  "maxCustomFieldsDepth": 128,
   "launch": "RELEASE-A",
   "from": "2026-07-01",
   "to": "2026-09-30"
@@ -650,6 +671,9 @@ Arguments:
   already exist.
 - `includeUnscheduled` defaults to `true`.
 - `maxItems` defaults to 300 and must be from 1 through 500.
+- `maxCustomFieldsDepth` defaults to 128 and must be from 1 through 512. Raise
+  it only to read deeper historical field envelopes; it does not expand the
+  timeline graph.
 - `from` and `to` are optional ISO-8601 schedule bounds. Scheduled items are
   included when their start/target interval overlaps the range; undated items
   remain eligible when `includeUnscheduled` is true.
@@ -730,7 +754,8 @@ milestones.
   "milestoneId": "NIM-456",
   "asOf": "2026-07-16",
   "lookaheadDays": 45,
-  "maxItems": 500
+  "maxItems": 500,
+  "maxCustomFieldsDepth": 128
 }
 ```
 
@@ -743,6 +768,8 @@ Arguments:
 - `asOf` is an optional ISO-8601 report date and defaults to today.
 - `lookaheadDays` defaults to 30 and must be from 1 through 365.
 - `maxItems` defaults to 500 and must be from 1 through 500.
+- `maxCustomFieldsDepth` defaults to 128 and must be from 1 through 512. The
+  effective value is included in the report's source provenance.
 
 Reports derive normalized relationships; they do not emit the obsolete
 links/backlinks sections.

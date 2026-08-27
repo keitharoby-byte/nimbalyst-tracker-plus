@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_ADAPTER = "tracker-items-normalized-timeline-v9"
+SCHEMA_ADAPTER = "tracker-items-normalized-timeline-v10"
 REQUIRED_COLUMNS = (
     "id",
     "issue_key",
@@ -32,6 +32,8 @@ MAX_TIMELINE_SELECTOR_SOURCE_ITEMS = 5_000
 MAX_TIMELINE_SELECTOR_SOURCE_RELATIONSHIPS = 5_000
 DEFAULT_REPORT_LOOKAHEAD_DAYS = 30
 MAX_REPORT_LOOKAHEAD_DAYS = 365
+DEFAULT_CUSTOM_FIELDS_DEPTH = 128
+MAX_CUSTOM_FIELDS_DEPTH = 512
 MAX_RESULT_BYTES = 500 * 1024
 MAX_INPUT_LINE_BYTES = 64 * 1024
 MAX_OUTPUT_LINE_BYTES = 512 * 1024

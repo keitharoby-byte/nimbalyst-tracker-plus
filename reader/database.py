@@ -19,9 +19,11 @@ from typing import Any, Iterator, Mapping
 try:
     from .contracts import (
         DEFAULT_LIMIT,
+        DEFAULT_CUSTOM_FIELDS_DEPTH,
         DEFAULT_REPORT_LOOKAHEAD_DAYS,
         DEFAULT_TIMELINE_ITEMS,
         MAX_COMMENT_CHARS,
+        MAX_CUSTOM_FIELDS_DEPTH,
         MAX_LIMIT,
         MAX_REPORT_LOOKAHEAD_DAYS,
         MAX_RESULT_BYTES,
@@ -41,9 +43,11 @@ try:
 except ImportError:  # pragma: no cover - used when server.py runs as a script
     from contracts import (  # type: ignore[no-redef]
         DEFAULT_LIMIT,
+        DEFAULT_CUSTOM_FIELDS_DEPTH,
         DEFAULT_REPORT_LOOKAHEAD_DAYS,
         DEFAULT_TIMELINE_ITEMS,
         MAX_COMMENT_CHARS,
+        MAX_CUSTOM_FIELDS_DEPTH,
         MAX_LIMIT,
         MAX_REPORT_LOOKAHEAD_DAYS,
         MAX_RESULT_BYTES,
@@ -62,14 +66,12 @@ except ImportError:  # pragma: no cover - used when server.py runs as a script
     from traverse import archived_explicitly_allowed, edge_matches, neighbor, validate_stage  # type: ignore[no-redef]
 
 
-MAX_CUSTOM_FIELDS_ENVELOPE_DEPTH = 32
-
-
 class NativeTrackerReader:
     """Open a fresh read-only SQLite connection for each bounded operation."""
 
     def __init__(self, database_path: Path | None = None) -> None:
         self._database_path = database_path
+        self._custom_fields_max_depth = DEFAULT_CUSTOM_FIELDS_DEPTH
         self._registry, self._registry_override_active, self._registry_override_error, self._registry_hash = effective_registry(Path.cwd())
         self._bundle_diagnostics = bundled_diagnostics()
 
@@ -131,6 +133,7 @@ class NativeTrackerReader:
 
     def timeline_snapshot(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_timeline_params(params)
+        self._custom_fields_max_depth = parsed["maxCustomFieldsDepth"]
         self._load_registry(parsed["workspacePath"])
         if parsed.get("selector"):
             return self._tag_seeded_timeline_snapshot(parsed)
@@ -611,6 +614,7 @@ class NativeTrackerReader:
         graph = self.traverse_graph({
             "workspacePath": parsed["workspacePath"],
             "roots": [parsed["launch"]],
+            "maxCustomFieldsDepth": parsed["maxCustomFieldsDepth"],
             "expand": {"relationshipTypes": relationship_types, "direction": "both", "maxDepth": 1, "edgeWhere": {"status": ["active"]}, "externalEndpointBehavior": "boundary"},
             "limits": {"maxNodes": parsed["maxItems"], "maxEdges": min(self._registry["caps"]["traverseEdgesMax"], parsed["maxItems"] * 2)},
             "failOn": {"truncation": False, "validation": False},
@@ -666,6 +670,7 @@ class NativeTrackerReader:
         allowed = {
             "workspacePath", "where", "savedQuery", "sort", "limit", "cursor",
             "includeArchived", "includeRelationshipRecords", "includeTotalCount",
+            "maxCustomFieldsDepth",
         }
         unknown = sorted(set(params) - allowed)
         if unknown:
@@ -674,6 +679,7 @@ class NativeTrackerReader:
         if not isinstance(workspace_path, str) or not Path(workspace_path).is_absolute():
             raise ReaderError("WORKSPACE_UNAVAILABLE", "The query requires an open local workspace.")
         self._load_registry(workspace_path)
+        self._custom_fields_max_depth = self._validated_custom_fields_depth(params)
         has_where = "where" in params
         has_saved = "savedQuery" in params
         if has_where == has_saved:
@@ -962,6 +968,7 @@ class NativeTrackerReader:
                 "includeArchived": include_archived,
                 "includeRelationshipRecords": include_links,
                 "includeTotalCount": include_total,
+                "maxCustomFieldsDepth": self._custom_fields_max_depth,
                 "validationScope": validation_scope,
             },
         }
@@ -981,7 +988,7 @@ class NativeTrackerReader:
     def traverse_graph(self, params: Mapping[str, Any]) -> dict[str, Any]:
         """Traverse normalized relationships from one or more bounded roots."""
         started = time.perf_counter()
-        allowed = {"workspacePath", "roots", "membership", "expand", "nodeWhere", "limits", "failOn", "savedQuery", "paginate", "cursor"}
+        allowed = {"workspacePath", "roots", "membership", "expand", "nodeWhere", "limits", "failOn", "savedQuery", "paginate", "cursor", "maxCustomFieldsDepth"}
         unknown = sorted(set(params) - allowed)
         if unknown:
             raise ReaderError("INVALID_PARAMS", f"Unknown parameter(s): {', '.join(unknown)}.")
@@ -989,6 +996,7 @@ class NativeTrackerReader:
         if not isinstance(workspace_path, str) or not Path(workspace_path).is_absolute():
             raise ReaderError("WORKSPACE_UNAVAILABLE", "Traversal requires an open local workspace.")
         self._load_registry(workspace_path)
+        self._custom_fields_max_depth = self._validated_custom_fields_depth(params)
         expanded: dict[str, Any] = dict(params)
         query_echo: dict[str, Any] = {}
         if "savedQuery" in params:
@@ -1000,7 +1008,7 @@ class NativeTrackerReader:
                 "workspacePath": workspace_path,
                 **{
                     key: params[key]
-                    for key in ("paginate", "cursor")
+                    for key in ("paginate", "cursor", "maxCustomFieldsDepth")
                     if key in params
                 },
             }
@@ -1242,6 +1250,7 @@ class NativeTrackerReader:
             "limits": {"maxNodes": max_nodes, "maxEdges": max_edges},
             "failOn": dict(fail_on),
             "paginate": paginate,
+            "maxCustomFieldsDepth": self._custom_fields_max_depth,
         }
         query_receipt["relationshipProjection"] = self._relationship_projection_receipt(
             edges,
@@ -1413,9 +1422,11 @@ class NativeTrackerReader:
         if set(traverse) - allowed_traverse:
             raise ReaderError("QUERY_INVALID", "The composed traversal stage is invalid.")
 
+        max_custom_fields_depth = self._custom_fields_max_depth
         selection = self.query_items(
             {
                 "workspacePath": workspace_path,
+                "maxCustomFieldsDepth": max_custom_fields_depth,
                 **dict(select),
                 "includeArchived": False,
                 "includeRelationshipRecords": False,
@@ -1479,6 +1490,7 @@ class NativeTrackerReader:
                     "selection": selection_receipt,
                     "resolvedRoots": [],
                     "failOn": dict(fail_on),
+                    "maxCustomFieldsDepth": max_custom_fields_depth,
                 },
             }
             result["query"]["queryFingerprint"] = self._stable_fingerprint(
@@ -1493,6 +1505,7 @@ class NativeTrackerReader:
         traversal = self.traverse_graph(
             {
                 "workspacePath": workspace_path,
+                "maxCustomFieldsDepth": max_custom_fields_depth,
                 "roots": root_ids[:root_cap],
                 **dict(traverse),
                 "failOn": {
@@ -1511,6 +1524,7 @@ class NativeTrackerReader:
             "nodeWhere": traversal["query"]["nodeWhere"],
             "limits": traversal["query"]["limits"],
             "failOn": dict(fail_on),
+            "maxCustomFieldsDepth": max_custom_fields_depth,
         }
         traversal["query"]["queryFingerprint"] = self._stable_fingerprint(
             {
@@ -2197,6 +2211,7 @@ class NativeTrackerReader:
                 "launchKeys": launch_keys,
                 "rootKeys": root_keys,
                 "includeUnscoped": include_unscoped,
+                "maxCustomFieldsDepth": self._custom_fields_max_depth,
             },
             "resolvedRoots": sorted(selected_root_ids),
             "boundaryRules": {
@@ -2631,11 +2646,13 @@ class NativeTrackerReader:
 
     def milestone_report(self, params: Mapping[str, Any]) -> dict[str, Any]:
         parsed = self._validated_report_params(params)
+        self._custom_fields_max_depth = parsed["maxCustomFieldsDepth"]
         snapshot = self.timeline_snapshot(
             {
                 "workspacePath": parsed["workspacePath"],
                 "includeUnscheduled": True,
                 "maxItems": parsed["maxItems"],
+                "maxCustomFieldsDepth": parsed["maxCustomFieldsDepth"],
             }
         )
         milestones = snapshot["milestones"]
@@ -2797,7 +2814,7 @@ class NativeTrackerReader:
         }
 
     def _validated_timeline_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        allowed = {"workspacePath", "includeUnscheduled", "maxItems", "from", "to", "launch", "selector"}
+        allowed = {"workspacePath", "includeUnscheduled", "maxItems", "from", "to", "launch", "selector", "maxCustomFieldsDepth"}
         unknown = sorted(set(params) - allowed)
         if unknown:
             raise ReaderError("INVALID_PARAMS", f"Unknown parameter(s): {', '.join(unknown)}.")
@@ -2810,6 +2827,7 @@ class NativeTrackerReader:
         max_items = params.get("maxItems", DEFAULT_TIMELINE_ITEMS)
         if isinstance(max_items, bool) or not isinstance(max_items, int) or not 1 <= max_items <= MAX_TIMELINE_ITEMS:
             raise ReaderError("INVALID_PARAMS", f"maxItems must be an integer from 1 through {MAX_TIMELINE_ITEMS}.")
+        max_custom_fields_depth = self._validated_custom_fields_depth(params)
         from_value = params.get("from")
         to_value = params.get("to")
         from_ms = self._optional_date_ms(from_value, "from")
@@ -2841,6 +2859,7 @@ class NativeTrackerReader:
             "workspacePath": workspace_path,
             "includeUnscheduled": include_unscheduled,
             "maxItems": max_items,
+            "maxCustomFieldsDepth": max_custom_fields_depth,
             "fromMs": from_ms,
             "toMs": to_ms,
             "launch": launch.strip() if isinstance(launch, str) else None,
@@ -2848,7 +2867,7 @@ class NativeTrackerReader:
         }
 
     def _validated_report_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        allowed = {"workspacePath", "milestoneId", "asOf", "lookaheadDays", "maxItems"}
+        allowed = {"workspacePath", "milestoneId", "asOf", "lookaheadDays", "maxItems", "maxCustomFieldsDepth"}
         unknown = sorted(set(params) - allowed)
         if unknown:
             raise ReaderError("INVALID_PARAMS", f"Unknown parameter(s): {', '.join(unknown)}.")
@@ -2866,12 +2885,14 @@ class NativeTrackerReader:
         max_items = params.get("maxItems", MAX_TIMELINE_ITEMS)
         if isinstance(max_items, bool) or not isinstance(max_items, int) or not 1 <= max_items <= MAX_TIMELINE_ITEMS:
             raise ReaderError("INVALID_PARAMS", f"maxItems must be an integer from 1 through {MAX_TIMELINE_ITEMS}.")
+        max_custom_fields_depth = self._validated_custom_fields_depth(params)
         return {
             "workspacePath": workspace_path,
             "milestoneId": milestone_id.strip() if isinstance(milestone_id, str) else None,
             "asOfMs": as_of_ms,
             "lookaheadDays": lookahead,
             "maxItems": max_items,
+            "maxCustomFieldsDepth": max_custom_fields_depth,
         }
 
     def _find_tracker(self, workspace_path: str, tracker_id: str) -> tuple[sqlite3.Row, str]:
@@ -3039,8 +3060,7 @@ class NativeTrackerReader:
             )
         return parsed
 
-    @staticmethod
-    def _flatten_custom_fields(data: Mapping[str, Any]) -> dict[str, Any]:
+    def _flatten_custom_fields(self, data: Mapping[str, Any]) -> dict[str, Any]:
         fields = dict(data)
         current = data.get("customFields")
         seen: set[int] = {id(data)}
@@ -3049,11 +3069,16 @@ class NativeTrackerReader:
             identity = id(current)
             if identity in seen:
                 break
-            if depth >= MAX_CUSTOM_FIELDS_ENVELOPE_DEPTH:
+            if depth >= self._custom_fields_max_depth:
                 raise ReaderError(
                     "CUSTOM_FIELDS_NESTING_EXCEEDED",
-                    "The tracker item's custom fields exceed the safe nesting limit.",
-                    {"maxDepth": MAX_CUSTOM_FIELDS_ENVELOPE_DEPTH},
+                    "The tracker item's custom fields exceed this call's nesting limit.",
+                    {
+                        "maxDepth": self._custom_fields_max_depth,
+                        "observedDepthAtLeast": depth + 1,
+                        "parameter": "maxCustomFieldsDepth",
+                        "hardMaximum": MAX_CUSTOM_FIELDS_DEPTH,
+                    },
                 )
             seen.add(identity)
             for key, value in current.items():
@@ -3061,6 +3086,16 @@ class NativeTrackerReader:
             current = current.get("customFields")
             depth += 1
         return fields
+
+    @staticmethod
+    def _validated_custom_fields_depth(params: Mapping[str, Any]) -> int:
+        value = params.get("maxCustomFieldsDepth", DEFAULT_CUSTOM_FIELDS_DEPTH)
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_CUSTOM_FIELDS_DEPTH:
+            raise ReaderError(
+                "INVALID_PARAMS",
+                f"maxCustomFieldsDepth must be an integer from 1 through {MAX_CUSTOM_FIELDS_DEPTH}.",
+            )
+        return value
 
     @staticmethod
     def _resolved_body(
@@ -4522,6 +4557,7 @@ class NativeTrackerReader:
             "registryOverrideActive": self._registry_override_active,
             "registryHash": self._registry_hash,
             "readerBundle": copy.deepcopy(self._bundle_diagnostics),
+            "maxCustomFieldsDepth": self._custom_fields_max_depth,
         }
         if schema_discovery is not None:
             source["schemaDiscovery"] = dict(schema_discovery)

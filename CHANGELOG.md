@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.16.0 - 2026-08-26
+
+- Raise the legacy custom-field envelope default from 32 to 128 and add a
+  per-call `maxCustomFieldsDepth` bound from 1 through the locked maximum of
+  512 on timeline, report, query, and traversal tools. The effective value is
+  echoed in provenance/query receipts and remains separate from relationship
+  traversal depth.
+- Attach compact tool-specific usage, constraints, mutually exclusive selector
+  guidance, and a valid example to incomplete, conflicting, cursor, complexity,
+  and custom-field-depth parameter failures across all six tools.
+
 ## 0.15.0 - 2026-08-26
 
 - Recover inline collection membership from bounded, deeply nested legacy

@@ -3,6 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { TOOL_NAMES, TOOL_NAMES_BY_FAMILY } from '../src/backendFamilies.ts';
+import {
+  CUSTOM_FIELDS_DEPTH_PROPERTY,
+  helpedErrorPayload,
+} from '../src/toolUsage.ts';
 
 const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
 const modules = Object.fromEntries(
@@ -32,4 +36,26 @@ test('manifest packages the read and projection families as separate modules', (
     modules['native-tracker-projection-backend'].permissions,
     ['mcp-server-register', 'workspace-files'],
   );
+});
+
+test('all tool parameter errors include compact tool-specific usage', async () => {
+  for (const toolName of TOOL_NAMES) {
+    const error = helpedErrorPayload({
+      code: 'INVALID_PARAMS',
+      message: 'The parameters are incomplete or conflicting.',
+    }, toolName);
+    assert.equal(error.details.usage.tool, toolName);
+    assert.ok(error.details.usage.example);
+    assert.ok(error.details.usage.constraints);
+  }
+});
+
+test('timeline, report, query, and traversal schemas expose bounded legacy depth', async () => {
+  assert.deepEqual(CUSTOM_FIELDS_DEPTH_PROPERTY, {
+    type: 'integer',
+    minimum: 1,
+    maximum: 512,
+    default: 128,
+    description: 'Maximum legacy customFields envelopes to unwrap per item. Raise for deeply nested historical timelines; the hard cap remains 512.',
+  });
 });

@@ -34,7 +34,7 @@ for (const entry of (await readdir(destination, { withFileTypes: true }))
 
 const identity = JSON.stringify({
   extensionVersion: packageManifest.version,
-  adapterVersion: 9,
+  adapterVersion: 10,
   registryVersion: registry.version,
   files,
 });
@@ -42,7 +42,7 @@ const bundleManifest = {
   formatVersion: 1,
   generationId: createHash('sha256').update(identity).digest('hex'),
   extensionVersion: packageManifest.version,
-  adapterVersion: 9,
+  adapterVersion: 10,
   registryVersion: registry.version,
   files,
 };

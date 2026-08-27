@@ -4,12 +4,12 @@
 
 - Validation date: 2026-08-26
 - Nimbalyst: 0.72.8 packaged build
-- Extension: Tracker+ 0.15.0
+- Extension: Tracker+ 0.16.0
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows
 - Database backend: SQLite
-- Schema adapter: `tracker-items-normalized-timeline-v9`
+- Schema adapter: `tracker-items-normalized-timeline-v10`
 - Registry: version 5
 - Saved-query catalog: version 1
 - Python: standard-library `sqlite3`
@@ -24,10 +24,12 @@ The adapter requires the `tracker_items` columns listed in
 fingerprint derived only from ordered column names and SQLite types. No data
 values contribute to the fingerprint.
 
-For read compatibility, the adapter follows up to 32 nested `customFields`
-mapping envelopes. Top-level fields take precedence, followed by the nearest
-envelope; deeper envelopes only fill missing keys. Repeated object identities
-terminate the walk, and a 33rd distinct envelope fails closed with
+For read compatibility, the adapter follows up to 128 nested `customFields`
+mapping envelopes by default. Timeline, report, query, and traversal calls may
+set `maxCustomFieldsDepth` from 1 through the locked maximum of 512. Top-level
+fields take precedence, followed by the nearest envelope; deeper envelopes
+only fill missing keys. Repeated object identities terminate the walk, and a
+distinct envelope beyond the effective call limit fails closed with
 `CUSTOM_FIELDS_NESTING_EXCEEDED`. This does not migrate or write tracker data.
 
 The effective registry combines:

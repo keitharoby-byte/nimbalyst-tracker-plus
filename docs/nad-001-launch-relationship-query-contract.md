@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.15.0. This document describes only the
+Accepted; amended for Tracker+ 0.16.0. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -53,6 +53,13 @@ nearer values take precedence, deeper values only fill missing keys, and the
 existing stable relationship tuple removes exact duplicates. Exceeding the
 nesting bound fails closed instead of silently dropping or partially trusting
 the relationship.
+
+The default compatibility bound is 128 envelopes. A caller may select
+`maxCustomFieldsDepth` from 1 through the locked maximum of 512 for timeline,
+report, query, and traversal operations. This storage-envelope bound is
+independent of membership/expansion `maxDepth`: increasing it can reveal
+already-stored fields but cannot expand the relationship topology. The
+effective value is echoed in the operation receipt.
 
 Rooted timeline projections derive membership from the registered root type.
 Launch roots use active incoming `part-of-launch`; milestone and release roots
@@ -142,6 +149,11 @@ parameters, and query fingerprint.
 Every query and traversal page includes boolean `hasMore`. It is true exactly
 when `nextCursor` is non-null and is identical to `continuationRequired`.
 `resultsComplete` is true only when `hasMore` and `truncated` are both false.
+
+Parameter failures for all public tools include a compact usage receipt with
+the tool name, required or mutually exclusive selectors, relevant bounds, and
+a valid generic example. This guidance augments the stable error code and does
+not include workspace paths or tracker data.
 
 ### Dispatch fails closed
 

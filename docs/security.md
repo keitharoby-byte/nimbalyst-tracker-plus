@@ -32,10 +32,11 @@ backends disabled until the user approves their first-use native-code prompts.
   retains archived evidence only on active `evidences` edges with an effective
   revision. Archived item rows never synthesize active inline relationships;
   explicitly stored active relationships keep unavailable-endpoint validation.
-- Legacy `customFields` compatibility follows at most 32 mapping envelopes,
-  stops on repeated object identity, and fails closed if the depth cap is
-  exceeded. Nearer fields take precedence so deeper legacy values cannot
-  override current data.
+- Legacy `customFields` compatibility follows 128 mapping envelopes by default
+  and accepts a per-call bound from 1 through a locked maximum of 512 on
+  timeline, report, query, and traversal tools. It stops on repeated object
+  identity and fails closed if the effective depth cap is exceeded. Nearer
+  fields take precedence so deeper legacy values cannot override current data.
 - Workspace policy overrides are read only from
   `.nimbalyst/tracker-plus.registry.json`; saved-query catalog overrides are
   read only from `.nimbalyst/tracker-plus.queries.json`. Both are validated
