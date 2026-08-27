@@ -46,7 +46,9 @@ backends disabled until the user approves their first-use native-code prompts.
   response.
 - Comment bodies are capped at 20,000 Unicode characters. Tracker bodies are
   capped at 100,000 characters. Each serialized result page is capped below the
-  512-KiB process-line ceiling. Predicate queries and opt-in standard
+  512-KiB process-line ceiling. Paginated traversal fitting includes finalized
+  cursor, completion, truncation, and validation metadata in that budget before
+  returning a page. Predicate queries and opt-in standard
   traversals can retrieve a complete logical result through opaque,
   identity-bound continuation cursors without raising that per-response limit.
   Dispatch and composed traversals remain atomic and fail closed on truncation.

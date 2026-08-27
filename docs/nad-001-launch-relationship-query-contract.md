@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.16.0. This document describes only the
+Accepted; amended for Tracker+ 0.16.1. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -149,6 +149,13 @@ parameters, and query fingerprint.
 Every query and traversal page includes boolean `hasMore`. It is true exactly
 when `nextCursor` is non-null and is identical to `continuationRequired`.
 `resultsComplete` is true only when `hasMore` and `truncated` are both false.
+
+For paginated traversal, the fixed response envelope is finalized before byte
+fitting. Cursor and completion fields plus validation completeness participate
+in the same budget as nodes, boundary nodes, edges, and findings. After any
+trimming, the complete envelope is measured again. A successful page must
+advance the cursor whenever its leading entity fits; failures distinguish an
+entity that cannot fit from an oversized fixed envelope.
 
 Parameter failures for all public tools include a compact usage receipt with
 the tool name, required or mutually exclusive selectors, relevant bounds, and

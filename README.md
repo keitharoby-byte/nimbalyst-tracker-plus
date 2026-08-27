@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.16.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.16.1 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,17 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.16.0
+## What's new in 0.16.1
+
+Paginated traversals now include their final cursor, completion, truncation,
+and validation metadata in the response byte budget. A page that fits remains
+under both the traversal and process-output limits while retaining the next
+fitting node and an accurate continuation cursor.
+
+Oversized traversal failures now distinguish a single entity that cannot fit
+from an oversized fixed response envelope, making recovery decisions explicit.
+
+## Previously in 0.16.0
 
 Timeline, report, query, and traversal calls now unwrap 128 legacy
 `customFields` envelopes by default and accept `maxCustomFieldsDepth` from 1

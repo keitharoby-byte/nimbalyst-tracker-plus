@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.16.1 - 2026-08-26
+
+- Finalize cursor, completion, truncation, and validation metadata before
+  trimming paginated traversal results, then recheck the completed envelope so
+  every successful page remains within both serialized-output limits. (#45)
+- Preserve a fitting leading node and its cursor progress when later entities
+  must be removed, and distinguish true single-entity overflow from fixed
+  envelope overflow in response-limit diagnostics.
+
 ## 0.16.0 - 2026-08-26
 
 - Raise the legacy custom-field envelope default from 32 to 128 and add a

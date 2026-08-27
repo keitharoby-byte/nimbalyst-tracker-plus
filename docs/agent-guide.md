@@ -230,6 +230,13 @@ complete graph. Cursors are bound to the selected graph and fail with
 and composed traversal modes remain atomic and fail closed; they do not support
 pagination.
 
+Every successful traversal page is measured after its cursor, completion,
+truncation, and validation-completeness metadata is finalized. If a
+`RESPONSE_TOO_LARGE` error reports `details.cause` as `entity`, narrow or repair
+the leading entity because it cannot fit on a page. A `fixed-envelope` cause
+means the non-entity response metadata itself exceeded the limit. Do not skip a
+cursor position to work around either failure.
+
 ## Saved query and role search catalog
 
 Saved queries are versioned, parameterized templates from the workspace's

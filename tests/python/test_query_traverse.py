@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
@@ -10,7 +11,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from reader.contracts import ReaderError
+from reader.contracts import MAX_OUTPUT_LINE_BYTES, ReaderError
 from reader.database import NativeTrackerReader
 from reader.query import resolve_dispatch_fail_on_policy, resolve_dispatch_scope_policy
 
@@ -1501,6 +1502,106 @@ class QueryTraverseTests(unittest.TestCase):
             [node["id"] for node in [*complete["nodes"], *complete["boundaryNodes"]]],
         )
         self.assertEqual(edge_ids, [edge["id"] for edge in complete["edges"]])
+
+    def test_paginated_traversal_final_metadata_is_inside_the_trim_budget(self) -> None:
+        result = {
+            "nodes": [{"id": "node-1", "title": "Fitting node"}],
+            "boundaryNodes": [],
+            "edges": [{
+                "id": "edge-1",
+                "sourceId": "node-1",
+                "targetId": "node-1",
+                "detail": "x" * 300,
+            }],
+            "page": {
+                "totalCount": 2,
+                "totalEdgeCount": 2,
+                "returnedCount": 1,
+                "returnedEdgeCount": 1,
+            },
+            "validation": self.reader._validation_block([]),
+            "watermark": {},
+            "query": {},
+        }
+        fingerprint = "f" * 64
+        pre_finalized = copy.deepcopy(result)
+        pre_finalized["page"].update({
+            "returnedCount": 1,
+            "returnedEdgeCount": 1,
+            "nextCursor": self.reader._encode_traversal_cursor(fingerprint, 1, 1),
+            "hasMore": True,
+            "truncated": True,
+            "resultsComplete": False,
+            "continuationRequired": True,
+            "responseTruncated": False,
+        })
+        pre_finalized_size = self.reader._json_size(pre_finalized)
+        finalized = copy.deepcopy(pre_finalized)
+        finalized["validation"]["findingsComplete"] = True
+        self.assertGreater(self.reader._json_size(finalized), pre_finalized_size)
+
+        with patch("reader.database.MAX_RESULT_BYTES", pre_finalized_size):
+            fitted = self.reader._fit_paginated_traversal_result(
+                result,
+                node_offset=0,
+                edge_offset=0,
+                node_total=2,
+                edge_total=2,
+                result_fingerprint=fingerprint,
+            )
+
+        self.assertEqual([node["id"] for node in fitted["nodes"]], ["node-1"])
+        self.assertEqual(fitted["edges"], [])
+        self.assertTrue(fitted["page"]["responseTruncated"])
+        self.assertTrue(fitted["page"]["continuationRequired"])
+        self.assertEqual(
+            self.reader._decode_traversal_cursor(
+                fitted["page"]["nextCursor"], fingerprint, 2, 2,
+            ),
+            (1, 0),
+        )
+        self.assertLessEqual(self.reader._json_size(fitted), pre_finalized_size)
+        self.assertLessEqual(self.reader._json_size(fitted), MAX_OUTPUT_LINE_BYTES)
+        process_output = json.dumps(
+            {"id": "test", "ok": True, "result": fitted},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.assertLessEqual(len(process_output), MAX_OUTPUT_LINE_BYTES)
+
+    def test_paginated_traversal_distinguishes_entity_and_envelope_overflow(self) -> None:
+        entity_result = {
+            "nodes": [{"id": "oversized", "detail": "x" * 1_000}],
+            "boundaryNodes": [],
+            "edges": [],
+            "page": {},
+            "validation": self.reader._validation_block([]),
+            "watermark": {},
+            "query": {},
+        }
+        with patch("reader.database.MAX_RESULT_BYTES", 800), self.assertRaises(ReaderError) as raised:
+            self.reader._fit_paginated_traversal_result(
+                entity_result, 0, 0, 1, 0, "e" * 64,
+            )
+        self.assertEqual(raised.exception.code, "RESPONSE_TOO_LARGE")
+        self.assertEqual(raised.exception.details["cause"], "entity")
+        self.assertIn("single paged traversal entity", raised.exception.message)
+
+        envelope_result = {
+            "nodes": [],
+            "boundaryNodes": [],
+            "edges": [],
+            "page": {},
+            "validation": self.reader._validation_block([]),
+            "watermark": {"fixed": "x" * 1_000},
+            "query": {},
+        }
+        with patch("reader.database.MAX_RESULT_BYTES", 300), self.assertRaises(ReaderError) as raised:
+            self.reader._fit_paginated_traversal_result(
+                envelope_result, 0, 0, 1, 0, "v" * 64,
+            )
+        self.assertEqual(raised.exception.code, "RESPONSE_TOO_LARGE")
+        self.assertEqual(raised.exception.details["cause"], "fixed-envelope")
 
     def test_traversal_cursor_rejects_a_changed_complete_graph(self) -> None:
         request = {

@@ -63,7 +63,7 @@ const readerManifest = JSON.parse(
 if (
   readerManifest.formatVersion !== 1
   || readerManifest.extensionVersion !== manifest.version
-  || readerManifest.adapterVersion !== 10
+  || readerManifest.adapterVersion !== 11
   || readerManifest.registryVersion !== 5
 ) {
   throw new Error('Reader bundle identity does not match the extension release.');

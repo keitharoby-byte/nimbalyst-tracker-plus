@@ -4,12 +4,12 @@
 
 - Validation date: 2026-08-26
 - Nimbalyst: 0.72.8 packaged build
-- Extension: Tracker+ 0.16.0
+- Extension: Tracker+ 0.16.1
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows
 - Database backend: SQLite
-- Schema adapter: `tracker-items-normalized-timeline-v10`
+- Schema adapter: `tracker-items-normalized-timeline-v11`
 - Registry: version 5
 - Saved-query catalog: version 1
 - Python: standard-library `sqlite3`
@@ -46,6 +46,11 @@ contains no active templates.
 Registry version, effective hash, query version, and override state appear in
 result receipts. Workspace query changes do not require rebuilding the
 extension.
+
+Paginated traversal fitting accounts for the finalized page and validation
+metadata before accepting a response. Successful pages remain below the
+500-KiB result limit and the 512-KiB process-line ceiling while advancing the
+opaque cursor whenever at least one leading entity fits.
 
 Native reader assets are generation-locked. `bundle-manifest.json` records the
 extension, adapter, and registry versions and the SHA-256 hash of every reader

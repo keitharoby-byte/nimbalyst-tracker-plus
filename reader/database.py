@@ -4869,6 +4869,11 @@ class NativeTrackerReader:
     ) -> dict[str, Any]:
         findings_trimmed = False
         response_truncated = False
+        initial_entity_count = (
+            len(result["nodes"])
+            + len(result["boundaryNodes"])
+            + len(result["edges"])
+        )
 
         def update_page() -> None:
             next_node_offset = node_offset + len(result["nodes"]) + len(result["boundaryNodes"])
@@ -4895,24 +4900,33 @@ class NativeTrackerReader:
                 "responseTruncated": response_truncated,
             })
 
+        def trim_to_budget() -> None:
+            nonlocal findings_trimmed, response_truncated
+            while self._json_size(result) > MAX_RESULT_BYTES and (
+                result["edges"]
+                or result["boundaryNodes"]
+                or result["nodes"]
+                or result["validation"]["findings"]
+            ):
+                response_truncated = True
+                if result["edges"]:
+                    result["edges"].pop()
+                elif result["boundaryNodes"]:
+                    result["boundaryNodes"].pop()
+                elif result["validation"]["findings"]:
+                    result["validation"]["findings"].pop()
+                    findings_trimmed = True
+                    result["validation"]["findingsComplete"] = False
+                else:
+                    result["nodes"].pop()
+                update_page()
+
+        # Fixed envelope fields participate in the byte budget from the first
+        # measurement. This avoids a successful fit being invalidated by
+        # metadata added after the trim loop.
+        result["validation"]["findingsComplete"] = True
         update_page()
-        while self._json_size(result) > MAX_RESULT_BYTES and (
-            result["edges"]
-            or result["boundaryNodes"]
-            or result["nodes"]
-            or result["validation"]["findings"]
-        ):
-            response_truncated = True
-            if result["edges"]:
-                result["edges"].pop()
-            elif result["boundaryNodes"]:
-                result["boundaryNodes"].pop()
-            elif result["nodes"]:
-                result["nodes"].pop()
-            else:
-                result["validation"]["findings"].pop()
-                findings_trimmed = True
-            update_page()
+        trim_to_budget()
 
         if findings_trimmed:
             result["validation"]["findings"].append(self._finding(
@@ -4928,12 +4942,24 @@ class NativeTrackerReader:
                 )
                 else "warn"
             )
-        result["validation"]["findingsComplete"] = not findings_trimmed
+            result["validation"]["findingsComplete"] = False
+        update_page()
+        trim_to_budget()
+        if findings_trimmed:
+            result["validation"]["state"] = (
+                "fail"
+                if any(
+                    item.get("severity") == "error"
+                    for item in result["validation"]["findings"]
+                )
+                else "warn"
+            )
         update_page()
         if self._json_size(result) > MAX_RESULT_BYTES:
             raise ReaderError(
                 "RESPONSE_TOO_LARGE",
-                "A single paged traversal entity exceeded the safe response limit.",
+                "The finalized paged traversal envelope exceeded the safe response limit.",
+                {"cause": "fixed-envelope", "maxBytes": MAX_RESULT_BYTES},
             )
         if (
             result["page"]["continuationRequired"]
@@ -4943,7 +4969,15 @@ class NativeTrackerReader:
         ):
             raise ReaderError(
                 "RESPONSE_TOO_LARGE",
-                "The paged traversal could not make progress within the safe response limit.",
+                (
+                    "A single paged traversal entity exceeded the safe response limit."
+                    if initial_entity_count
+                    else "The paged traversal could not make progress within the safe response limit."
+                ),
+                {
+                    "cause": "entity" if initial_entity_count else "no-progress",
+                    "maxBytes": MAX_RESULT_BYTES,
+                },
             )
         for item in result["nodes"]:
             for key in [entry for entry in item if entry.startswith("_")]:
