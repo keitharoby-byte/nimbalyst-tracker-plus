@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.18.0 - 2026-08-27
+
+- Scale native-reader deadlines by operation and bounded request size, return
+  structured `READER_TIMEOUT` diagnostics, and isolate a timed-out helper so
+  the next request can start from the same verified generation. (#46)
+- Add an atomically validated `dispatchPosture` policy for required,
+  conditional-required, positive-blocker, and advisory signals. Detailed
+  receipts preserve exact values, sources, dispositions, conditions, and a
+  posture fingerprint while safety-critical revision and QA gates remain
+  mandatory. (#47)
+- Advance the public reader contract to schema adapter version 13 and registry
+  version 6.
+
+## 0.17.0 - 2026-08-27
+
+- Expose normalized `packetId` values on item nodes and allow direct query or
+  traversal `nodeWhere` predicates with `eq`, `in`, and `exists` operators.
+- Read packet identifiers through the bounded `customFields` envelope chain
+  without adding a tracker write path, and advance the schema adapter to
+  version 12.
+
 ## 0.16.1 - 2026-08-26
 
 - Finalize cursor, completion, truncation, and validation metadata before

@@ -42,6 +42,16 @@ issue key in another workspace is intentionally invisible.
 Retry after a short delay. The reader uses a bounded one-second SQLite busy
 timeout and never holds a connection between tool calls.
 
+## `READER_TIMEOUT`
+
+The native reader exceeded the bounded deadline selected for its operation and
+request size. The diagnostic identifies the method, configured deadline,
+execution phase, attempt, and verified reader generation without exposing
+tracker data or paths. No partial result is returned. Retry the request once;
+the timed-out helper is terminated and the next request starts cleanly. If the
+same bounded request repeatedly times out, reduce its page or traversal limits
+or capture the safe diagnostic and extension logs for investigation.
+
 ## Tools are absent
 
 Confirm that the extension is enabled and consent was granted for the relevant

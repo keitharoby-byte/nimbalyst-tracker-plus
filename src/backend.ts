@@ -188,7 +188,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        where: { type: 'object', description: 'Validated all/any/not/field predicate clause tree.' },
+        where: { type: 'object', description: 'Validated all/any/not/field predicate clause tree. packetId supports eq, in, and exists.' },
         savedQuery: { type: 'object', description: 'Versioned registry query id and parameter object.' },
         sort: { type: 'array', items: { type: 'object' } },
         limit: { type: 'number', default: 50, minimum: 1, maximum: 200 },
@@ -211,7 +211,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
         roots: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 },
         membership: { type: 'object' },
         expand: { type: 'object' },
-        nodeWhere: { type: 'object' },
+        nodeWhere: { type: 'object', description: 'Optional member predicate. packetId supports eq, in, and exists.' },
         limits: { type: 'object' },
         failOn: { type: 'object' },
         savedQuery: { type: 'object' },

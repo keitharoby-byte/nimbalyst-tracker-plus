@@ -1,4 +1,4 @@
-import type { ReaderErrorPayload } from './contracts';
+import type { ReaderErrorPayload } from './contracts.ts';
 
 export class NativeTrackerError extends Error {
   readonly code: string;

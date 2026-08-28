@@ -690,7 +690,7 @@ class NativeTrackerReader:
             definition, query_echo = expand_saved_query(params["savedQuery"], self._registry, "predicate")
             expanded = {**definition, **{key: value for key, value in params.items() if key not in {"savedQuery"}}}
         where = expanded.get("where")
-        compiler = PredicateCompiler(self._registry)
+        compiler = PredicateCompiler(self._registry, self._custom_fields_max_depth)
         compiler.validate(where)
         where_sql, values = compiler.compile(where)
         sort = validate_sort(expanded.get("sort"))
@@ -1558,6 +1558,9 @@ class NativeTrackerReader:
     ) -> dict[str, Any]:
         """Resolve one deterministic, fail-closed dispatch candidate set."""
         policy = self._registry["dispatchPolicy"]
+        posture = self._registry["dispatchPosture"]
+        posture_signals = posture["signals"]
+        posture_fingerprint = self._stable_fingerprint(posture)
         evidence_mapping = self._registry["dispatchEvidence"]
         evidence_mapping_fingerprint = self._stable_fingerprint(evidence_mapping)
         scope_policy = resolve_dispatch_scope_policy(
@@ -1908,6 +1911,72 @@ class NativeTrackerReader:
             execution_constraint = evidence["executionConstraint"]["value"]
             failure_state = evidence["failureState"]["value"]
             superseded_by = evidence["supersededBy"]["value"]
+            database_bearing = evidence["databaseBearing"]["value"]
+            database_route_rule = posture_signals["databaseRouteState"]
+            database_route_required = (
+                database_route_rule["classification"] == "required"
+                or (
+                    database_route_rule["classification"] == "conditional-required"
+                    and database_bearing is True
+                )
+            )
+            signal_values = {
+                "packetRevision": packet_revision,
+                "revisionCurrentness": (
+                    True
+                    if is_current is True
+                    else packet_revision == current_revision
+                    if packet_revision is not None and current_revision is not None
+                    else None
+                ),
+                "qaEvidenceRevision": qa_revision,
+                "qaStatus": qa_status,
+                "holdState": hold_state,
+                "databaseRouteState": database_route,
+                "custodyState": custody_state,
+                "survivorState": survivor_state,
+                "collisionState": collision_state,
+                "executionConstraint": execution_constraint,
+                "failureState": failure_state,
+                "supersededBy": superseded_by,
+            }
+            signal_posture: dict[str, dict[str, Any]] = {}
+            for signal in sorted(posture_signals):
+                rule = posture_signals[signal]
+                classification = rule["classification"]
+                active = not (
+                    classification == "conditional-required"
+                    and database_bearing is not True
+                )
+                source_evidence = (
+                    evidence[signal]
+                    if signal in evidence
+                    else {
+                        "value": signal_values[signal],
+                        "source": {
+                            "kind": "logical",
+                            "signals": ["currentRevision", "isCurrentRevision"],
+                        },
+                    }
+                )
+                signal_posture[signal] = {
+                    "classification": classification,
+                    "disposition": "advisory" if classification == "advisory" else "admission",
+                    "active": active,
+                    "value": source_evidence["value"],
+                    "source": copy.deepcopy(source_evidence["source"]),
+                    **(
+                        {
+                            "condition": {
+                                **copy.deepcopy(rule["condition"]),
+                                "matched": database_bearing is True,
+                                "evidence": copy.deepcopy(evidence["databaseBearing"]),
+                            }
+                        }
+                        if classification == "conditional-required"
+                        else {}
+                    ),
+                }
             reasons: list[str] = []
             if packet_revision is None:
                 reasons.append("packet-revision-missing")
@@ -1928,27 +1997,48 @@ class NativeTrackerReader:
                 value.casefold() for value in policy["qaPassStatuses"]
             }:
                 reasons.append("qa-not-passed")
-            if str(hold_state or "").casefold() not in {
+            hold_is_clear = str(hold_state or "").casefold() in {
                 value.casefold() for value in policy["clearHoldStates"]
-            }:
+            }
+            hold_classification = posture_signals["holdState"]["classification"]
+            if (
+                (hold_classification == "required" and not hold_is_clear)
+                or (
+                    hold_classification == "positive-blocker"
+                    and hold_state is not None
+                    and not hold_is_clear
+                )
+            ):
                 reasons.append("hold-not-clear")
-            if execution_constraint in {"blocked", "paused", "waiting"}:
+            if (
+                posture_signals["executionConstraint"]["classification"] == "positive-blocker"
+                and execution_constraint in {"blocked", "paused", "waiting"}
+            ):
                 reasons.append(f"execution-{execution_constraint}")
-            if str(database_route or "").casefold() not in {
+            if database_route_required and str(database_route or "").casefold() not in {
                 value.casefold() for value in policy["admissibleDatabaseRoutes"]
             }:
                 reasons.append("database-route-inadmissible")
-            if str(custody_state or "").casefold() not in {
+            if (
+                posture_signals["custodyState"]["classification"] == "required"
+                and str(custody_state or "").casefold() not in {
                 value.casefold() for value in policy["clearCustodyStates"]
-            }:
+                }
+            ):
                 reasons.append("custody-conflict-or-unknown")
-            if str(survivor_state or "").casefold() not in {
+            if (
+                posture_signals["survivorState"]["classification"] == "required"
+                and str(survivor_state or "").casefold() not in {
                 value.casefold() for value in policy["survivorStates"]
-            }:
+                }
+            ):
                 reasons.append("survivor-state-ineligible")
-            if str(collision_state or "").casefold() not in {
+            if (
+                posture_signals["collisionState"]["classification"] == "required"
+                and str(collision_state or "").casefold() not in {
                 value.casefold() for value in policy["clearCollisionStates"]
-            }:
+                }
+            ):
                 reasons.append("collision-or-overlap")
             if failure_state and failure_state.casefold() not in {"clear", "none", "passed"}:
                 reasons.append("failure-present")
@@ -1962,21 +2052,23 @@ class NativeTrackerReader:
                 reasons.append("hard-dependency-unsatisfied")
 
             evidence_required = True
-            missing_fields = [
-                name for name, value in {
-                    "packetRevision": packet_revision,
-                    "qaEvidenceRevision": qa_revision,
-                    "qaStatus": qa_status,
-                    "holdState": hold_state,
-                    "databaseRouteState": database_route,
-                    "custodyState": custody_state,
-                    "survivorState": survivor_state,
-                    "collisionState": collision_state,
-                }.items()
-                if value is None
-            ]
+            required_signals = {
+                signal
+                for signal, rule in posture_signals.items()
+                if rule["classification"] == "required"
+            }
+            if database_route_required:
+                required_signals.add("databaseRouteState")
+            missing_fields = sorted(
+                signal
+                for signal in required_signals
+                if signal != "revisionCurrentness" and signal_values[signal] is None
+            )
             missing_signals = list(missing_fields)
-            if not (is_current is True or current_revision is not None):
+            if (
+                "revisionCurrentness" in required_signals
+                and signal_values["revisionCurrentness"] is None
+            ):
                 missing_signals.append("revision-currentness")
             if evidence_required and missing_signals:
                 incomplete_receipt = {
@@ -2053,6 +2145,7 @@ class NativeTrackerReader:
                 },
                 "survivorState": survivor_state,
                 "collisionState": collision_state,
+                "signalPosture": signal_posture,
                 "evidenceCompleteness": {
                     "state": "incomplete" if missing_signals else "complete",
                     "missingFields": missing_fields,
@@ -2230,6 +2323,11 @@ class NativeTrackerReader:
                 "signals": sorted(evidence_mapping),
                 "acceptedLogicalSources": accepted_logical_sources,
             },
+            "dispatchPosture": {
+                "version": posture["version"],
+                "signals": copy.deepcopy(posture_signals),
+                "fingerprint": posture_fingerprint,
+            },
             "pagination": {"cursor": None, "truncated": False},
             "failOn": fail_on,
             "unresolvedEvidenceDisposition": (
@@ -2243,6 +2341,7 @@ class NativeTrackerReader:
                 "resolvedRoots": query_receipt["resolvedRoots"],
                 "boundaryRules": query_receipt["boundaryRules"],
                 "evidenceMapping": query_receipt["evidenceMapping"],
+                "dispatchPosture": query_receipt["dispatchPosture"],
                 "schemaAdapter": SCHEMA_ADAPTER,
                 "schemaFingerprint": fingerprint,
                 "registryVersion": self._registry["version"],
@@ -2410,7 +2509,7 @@ class NativeTrackerReader:
                     raw = fields.get(source["field"])
                     value = (
                         raw if isinstance(raw, bool) else None
-                    ) if signal == "isCurrentRevision" else self._bounded_string(raw, 200)
+                    ) if signal in {"isCurrentRevision", "databaseBearing"} else self._bounded_string(raw, 200)
                     if value is not None:
                         result = {
                             "value": value,
@@ -3526,6 +3625,7 @@ class NativeTrackerReader:
                 "acceptanceContentPresent": acceptance_content_present,
             },
             "launchKey": self._bounded_string(fields.get("launchKey"), 100),
+            "packetId": self._bounded_string(fields.get("packetId"), 200),
             "tags": [self._bounded_string(value, 100) for value in fields.get("tags", []) if self._bounded_string(value, 100)] if isinstance(fields.get("tags"), list) else [],
             "actualDate": self._date_string(fields.get("actualDate")),
             "_launchOwnerPresent": owner_label is not None,

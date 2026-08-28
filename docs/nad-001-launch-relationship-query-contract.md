@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.16.1. This document describes only the
+Accepted; amended for Tracker+ 0.18.0. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -122,7 +122,8 @@ defect remains fail-closed.
 ### Policy is installation-specific
 
 `.nimbalyst/tracker-plus.registry.json` may override terminal statuses, role
-aliases/attention tags, and the complete dispatch policy object. Saved queries
+aliases/attention tags, the complete dispatch policy object, and the complete
+versioned dispatch posture object. Saved queries
 are rejected there to preserve one authoritative catalog. Relationship
 vocabulary, scope-role vocabulary, executable types, caps, and registry
 version remain locked structural values.
@@ -141,6 +142,21 @@ exceeds a node, edge, or response page, an opt-in cursor binds continuation to
 the selected node/edge identity so agents can aggregate the complete graph
 without raising the per-response cap. Dispatch and composed traversals remain
 atomic and fail closed instead of paging.
+
+`packetId` is a public normalized item field. Predicate queries and traversal
+member filters allow `eq`, `in`, and `exists`; comparisons are parameterized
+and case-insensitive, and returned values are length-bounded. It does not add a
+write capability or broaden traversal topology.
+
+Dispatch posture has a closed signal/classification matrix. Revision and QA
+signals remain required; supported operational signals may be required,
+positive-blocking, advisory, or conditionally required only where declared by
+the registry contract. The database route condition consumes the explicit
+boolean `databaseBearing` evidence signal and never infers intent from titles,
+tags, types, or other near-name fields. Invalid or incomplete posture
+overrides are rejected atomically. Effective posture, exact source/value
+disposition, conditional evidence, and the posture fingerprint are auditable
+in receipts and participate in the query fingerprint.
 
 Receipts include pagination/truncation, validation, resolved roots, boundary
 rules, schema adapter/fingerprint, registry version/hash, watermark, expanded
@@ -165,9 +181,11 @@ not include workspace paths or tracker data.
 ### Dispatch fails closed
 
 The `dispatch-eligible-work-v1` execution mode is a generic engine whose
-workflow values come from `dispatchPolicy`. It emits candidates only after
-revision-specific QA, scope, dependency, hold, route, custody, survivor, and
-collision evidence is complete and admissible.
+workflow values come from `dispatchPolicy` and whose signal admission behavior
+comes from `dispatchPosture`. It emits candidates only after all active
+required and positive-blocking checks, revision-specific QA, scope,
+dependencies, and topology checks pass. Advisory signals remain fully visible
+without affecting admission.
 
 Revision currentness is a logical signal, not a writable field contract. The
 receipt derives its accepted sources from the effective registry and exposes

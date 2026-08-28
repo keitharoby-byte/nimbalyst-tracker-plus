@@ -6,7 +6,7 @@ export {
   TOOL_QUERY,
   TOOL_SYNC_TIMELINE,
   TOOL_TRAVERSE,
-} from './backendFamilies';
+} from './backendFamilies.ts';
 
 export type ReaderMethod =
   | 'list_comments'

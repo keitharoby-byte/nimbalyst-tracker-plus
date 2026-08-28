@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.16.1 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.18.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,27 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.16.1
+## What's new in 0.18.0
+
+Native-reader deadlines now adapt to the operation and its bounded page or
+graph size. A timeout reports its method, configured deadline, elapsed phase,
+attempt, and verified bundle generation, then cleanly releases the helper so a
+following request can succeed without inheriting stale process state.
+
+Dispatch admission posture can now be configured declaratively. Workspace
+policy may make supported operational signals required, conditional,
+positive blockers, or advisory; revision and QA safety gates remain required.
+Receipts expose the exact value, trusted source, disposition, condition, and
+stable posture fingerprint used for every decision.
+
+## Previously in 0.17.0
+
+Native `packetId` values are now available on normalized item nodes and can be
+used in direct predicates and traversal member filters. Exact, bounded-list,
+and presence queries use the same case-insensitive identifier behavior as
+other native tracker identifiers.
+
+## Previously in 0.16.1
 
 Paginated traversals now include their final cursor, completion, truncation,
 and validation metadata in the response byte budget. A page that fits remains

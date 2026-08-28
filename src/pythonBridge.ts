@@ -7,18 +7,19 @@ import type {
   ReaderMethod,
   ReaderProtocolRequest,
   ReaderProtocolResponse,
-} from './contracts';
-import { BridgeTransportError, NativeTrackerError } from './errors';
+} from './contracts.ts';
+import { BridgeTransportError, NativeTrackerError } from './errors.ts';
 import {
   prepareReaderSnapshot,
   ReaderBundleError,
   removeReaderSnapshot,
   type ReaderSnapshot,
-} from './readerBundle';
+} from './readerBundle.ts';
 
-const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_INPUT_LINE_BYTES = 64 * 1024;
 const MAX_OUTPUT_LINE_BYTES = 512 * 1024;
+const MIN_READER_DEADLINE_MS = 10_000;
+const MAX_READER_DEADLINE_MS = 45_000;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -31,7 +32,42 @@ interface PythonCandidate {
   prefixArgs: string[];
 }
 
+export interface PythonBridgeOptions {
+  deadlineFor?: (method: ReaderMethod, params: Record<string, unknown>) => number;
+}
+
+function boundedInteger(value: unknown, fallback: number, maximum: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? Math.min(value, maximum)
+    : fallback;
+}
+
+export function readerRequestDeadlineMs(
+  method: ReaderMethod,
+  params: Record<string, unknown>,
+): number {
+  if (method === 'query_items') {
+    const limit = boundedInteger(params.limit, 50, 200);
+    return Math.min(MAX_READER_DEADLINE_MS, 12_000 + (limit * 50));
+  }
+  if (method === 'traverse_graph') {
+    const limits = params.limits && typeof params.limits === 'object' && !Array.isArray(params.limits)
+      ? params.limits as Record<string, unknown>
+      : {};
+    const maxNodes = boundedInteger(limits.maxNodes, 500, 500);
+    const maxEdges = boundedInteger(limits.maxEdges, 1_000, 1_000);
+    return Math.min(MAX_READER_DEADLINE_MS, 15_000 + (maxNodes * 20) + (maxEdges * 10));
+  }
+  if (method === 'timeline_snapshot' || method === 'milestone_report') {
+    return 30_000;
+  }
+  return MIN_READER_DEADLINE_MS;
+}
+
 export class PythonBridge {
+  private readonly extensionPath: string;
+  private readonly log: (level: 'info' | 'warn' | 'error', message: string) => void;
+  private readonly options: PythonBridgeOptions;
   private child: ChildProcessWithoutNullStreams | null = null;
   private stdoutBuffer = Buffer.alloc(0);
   private readonly pending = new Map<string, PendingRequest>();
@@ -39,16 +75,21 @@ export class PythonBridge {
   private snapshot: ReaderSnapshot | null = null;
 
   constructor(
-    private readonly extensionPath: string,
-    private readonly log: (level: 'info' | 'warn' | 'error', message: string) => void,
-  ) {}
+    extensionPath: string,
+    log: (level: 'info' | 'warn' | 'error', message: string) => void,
+    options: PythonBridgeOptions = {},
+  ) {
+    this.extensionPath = extensionPath;
+    this.log = log;
+    this.options = options;
+  }
 
   async request(method: ReaderMethod, params: Record<string, unknown>): Promise<unknown> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return await this.requestOnce(method, params);
+        return await this.requestOnce(method, params, attempt + 1);
       } catch (error) {
         if (!(error instanceof BridgeTransportError) || attempt === 1) {
           throw error;
@@ -70,17 +111,31 @@ export class PythonBridge {
     this.starting = null;
     this.stdoutBuffer = Buffer.alloc(0);
 
-    if (child && !child.killed) {
-      child.kill();
-    }
+    const childStopped = child && child.exitCode === null
+      ? new Promise<void>((resolve) => {
+          const fallback = setTimeout(resolve, 1_000);
+          fallback.unref();
+          child.once('exit', () => {
+            clearTimeout(fallback);
+            resolve();
+          });
+          if (!child.killed) child.kill();
+        })
+      : Promise.resolve();
 
     this.rejectAll(new BridgeTransportError('The native tracker helper stopped.'));
     const snapshot = this.snapshot;
     this.snapshot = null;
+    await childStopped;
     await removeReaderSnapshot(snapshot);
   }
 
-  private async requestOnce(method: ReaderMethod, params: Record<string, unknown>): Promise<unknown> {
+  private async requestOnce(
+    method: ReaderMethod,
+    params: Record<string, unknown>,
+    attempt: number,
+  ): Promise<unknown> {
+    const coldStart = !this.child || this.child.killed;
     await this.ensureStarted();
     const child = this.child;
     if (!child || child.killed) {
@@ -100,12 +155,39 @@ export class PythonBridge {
       });
     }
 
+    const configuredDeadlineMs = Math.max(
+      1,
+      Math.floor((this.options.deadlineFor ?? readerRequestDeadlineMs)(method, params)),
+    );
+    const verifiedGeneration = this.snapshot?.manifest.generationId ?? 'unavailable';
+    const phase = coldStart ? 'cold-start-and-execution' : 'execution';
+
     return await new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(request.id);
-        reject(new BridgeTransportError('The native tracker helper timed out after 5 seconds.'));
+        const error = new NativeTrackerError({
+          code: 'READER_TIMEOUT',
+          message: 'The native tracker reader exceeded its supported execution deadline.',
+          details: {
+            method,
+            configuredDeadlineMs,
+            elapsedPhase: phase,
+            attempt,
+            verifiedGeneration,
+          },
+        });
+        reject(error);
+        this.rejectAll(error);
+        this.log(
+          'warn',
+          `[tracker-plus] helper.timeout method=${method}`
+          + ` deadlineMs=${configuredDeadlineMs}`
+          + ` phase=${phase}`
+          + ` attempt=${attempt}`
+          + ` generation=${verifiedGeneration.slice(0, 12)}`,
+        );
         void this.stop();
-      }, REQUEST_TIMEOUT_MS);
+      }, configuredDeadlineMs);
 
       this.pending.set(request.id, { resolve, reject, timeout });
       child.stdin.write(encoded, 'utf8', (error) => {
@@ -216,11 +298,13 @@ export class PythonBridge {
       }
     });
     child.once('exit', (code, signal) => {
-      if (this.child === child) this.child = null;
+      if (this.child !== child) return;
+      this.child = null;
       this.rejectAll(new BridgeTransportError(`The native tracker helper exited unexpectedly (${code ?? signal ?? 'unknown'}).`));
     });
     child.once('error', () => {
-      if (this.child === child) this.child = null;
+      if (this.child !== child) return;
+      this.child = null;
       this.rejectAll(new BridgeTransportError('The native tracker helper crashed.'));
     });
   }

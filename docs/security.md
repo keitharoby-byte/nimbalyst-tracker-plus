@@ -16,6 +16,8 @@ backends disabled until the user approves their first-use native-code prompts.
   SQLite is touched. Caller values are always `?` bindings; title search also
   escapes `%`, `_`, and `\`. Query depth, clauses, list values, text length,
   page size, traversal roots/depth/nodes/edges, and serialized bytes are capped.
+  `packetId` supports only exact, bounded-list, and presence predicates and is
+  returned only as a bounded normalized string.
 - The database path comes from Nimbalyst's local configuration. The
   `NIMBALYST_SQLITE_PATH` environment variable is only a process-start
   development/test override and is never an MCP argument.
@@ -44,6 +46,12 @@ backends disabled until the user approves their first-use native-code prompts.
   missing or malformed catalogs activate no saved queries. Locked
   vocabulary/cap keys or malformed definitions surface a warning in every
   response.
+- Dispatch posture overrides use a closed signal/classification matrix and
+  replace the complete versioned posture atomically. Packet revision,
+  currentness, QA revision, and QA status cannot be downgraded. Conditional
+  database routing depends only on the explicit boolean `databaseBearing`
+  evidence signal; advisory values retain their trusted source and disposition
+  in receipts without affecting admission.
 - Comment bodies are capped at 20,000 Unicode characters. Tracker bodies are
   capped at 100,000 characters. Each serialized result page is capped below the
   512-KiB process-line ceiling. Paginated traversal fitting includes finalized
@@ -52,9 +60,12 @@ backends disabled until the user approves their first-use native-code prompts.
   traversals can retrieve a complete logical result through opaque,
   identity-bound continuation cursors without raising that per-response limit.
   Dispatch and composed traversals remain atomic and fail closed on truncation.
-- The helper rejects input lines over 64 KiB, times out after five seconds,
-  restarts at most once after a transport failure, and fails closed on unknown
-  methods or schema drift.
+- The helper rejects input lines over 64 KiB and uses bounded, operation-aware
+  deadlines scaled by requested page or graph size. A timeout fails closed with
+  no partial result, records only the method, configured deadline, execution
+  phase, attempt, and verified generation, terminates that helper, and does not
+  consume the transport retry reserved for recoverable pipe failures. Unknown
+  methods and schema drift also fail closed.
 - Logs contain operation names, duration, and error codes only. They never log
   titles, bodies, comment text, identity objects, email addresses, or paths.
 - Generated paths must be relative, remain inside the current workspace, end

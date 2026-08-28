@@ -141,6 +141,17 @@ Direct predicates use `all`, `any`, `not`, or a field clause:
 }
 ```
 
+`packetId` is available as an exact identifier predicate and on returned item
+nodes. Use `eq` for one identifier, `in` for a bounded identifier list, or
+`exists` with a boolean value to select items based on presence. The same field
+and operators are valid in traversal `nodeWhere` member filters:
+
+```json
+{
+  "where": { "field": "packetId", "op": "eq", "value": "packet-123" }
+}
+```
+
 `limit` defaults to 50 and is capped at 200. `cursor` accepts only the opaque
 `page.nextCursor` from the same query and sort. When
 `page.continuationRequired` is true, repeat the identical request with that
@@ -386,7 +397,7 @@ but do not infer scope.
 
 Potentially eligible rows resolve `packetRevision`, currentness,
 `qaEvidenceRevision`, `qaStatus`, `holdState`, `databaseRouteState`,
-`custodyState`, `survivorState`, and `collisionState` through the effective
+`databaseBearing`, `custodyState`, `survivorState`, and `collisionState` through the effective
 `dispatchEvidence` mapping. Bundled defaults read the like-named native fields.
 QA evidence must match the packet revision. Optional `pullRequestCustody`,
 `sessionCustody`, and `worktreeCustody` values are returned without being
@@ -541,6 +552,45 @@ resolved evidence value and source;
 the mapping. `includeUnscoped=true` with an empty
 `admittedUnscopedTypes` list is rejected as `UNSCOPED_WORK_NOT_CONFIGURED`.
 
+`dispatchPosture` is a complete, versioned workspace override. It uses a
+closed signal/classification matrix: revision and QA signals remain
+`required`; supported operational signals may use only their allowlisted
+`required`, `conditional-required`, `positive-blocker`, or `advisory` posture.
+Conditional database routing must use the explicit `databaseBearing=true`
+predicate. Unknown signals, missing signals, forbidden downgrades, ambiguous
+conditions, and conflicting shapes reject the entire override.
+
+```json
+{
+  "dispatchPosture": {
+    "version": 1,
+    "signals": {
+      "packetRevision": { "classification": "required" },
+      "revisionCurrentness": { "classification": "required" },
+      "qaEvidenceRevision": { "classification": "required" },
+      "qaStatus": { "classification": "required" },
+      "holdState": { "classification": "positive-blocker" },
+      "databaseRouteState": {
+        "classification": "conditional-required",
+        "condition": { "signal": "databaseBearing", "op": "eq", "value": true }
+      },
+      "custodyState": { "classification": "advisory" },
+      "survivorState": { "classification": "advisory" },
+      "collisionState": { "classification": "advisory" },
+      "executionConstraint": { "classification": "advisory" },
+      "failureState": { "classification": "positive-blocker" },
+      "supersededBy": { "classification": "positive-blocker" }
+    }
+  }
+}
+```
+
+Detailed row receipts expose `signalPosture` with the exact classification,
+admission/advisory disposition, active state, value, and trusted source. A
+conditional signal also records its predicate, match result, and evidence.
+`query.dispatchPosture` exposes the effective policy and fingerprint, and the
+posture participates in `queryFingerprint`.
+
 ### Extending the role catalog
 
 Add workspace-specific roles without rebuilding Tracker+ by creating
@@ -561,8 +611,8 @@ The existing `role-active-work-and-attention` template immediately accepts
 `{"roleId":"quality-lead"}`. Role IDs must match
 `^[a-z0-9][a-z0-9-]{0,63}$`. Override roles require at least one owner alias;
 the attention-tag array may be empty. Role, saved-query, and dispatch-evidence
-entries merge by ID, while `terminalStatuses` and `dispatchPolicy` replace
-their entire bundled values when present.
+entries merge by ID, while `terminalStatuses`, `dispatchPolicy`, and
+`dispatchPosture` replace their entire bundled values when present.
 
 Roles are selectors, not permissions or assignments. An owner alias matches
 work already owned by that identity; an attention tag includes work requesting

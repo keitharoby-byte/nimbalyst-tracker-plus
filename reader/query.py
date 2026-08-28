@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover
 
 FIELD_OPERATORS: dict[str, set[str]] = {
     "id": {"eq", "in"}, "issueKey": {"eq", "in", "exists"},
+    "packetId": {"eq", "in", "exists"},
     "type": {"eq", "neq", "in", "notIn"},
     "typeTags": {"contains", "containsAny", "containsAll"},
     "title": {"eq", "contains"}, "status": {"eq", "neq", "in", "notIn"},
@@ -32,7 +33,7 @@ FIELD_OPERATORS: dict[str, set[str]] = {
 }
 SORT_FIELDS = {"priority", "updated", "created", "dueDate", "title", "id"}
 DATA_FIELDS = {
-    "title", "status", "priority", "owner", "tags", "launchKey", "scheduleHealth",
+    "title", "status", "priority", "owner", "tags", "launchKey", "packetId", "scheduleHealth",
     "executionConstraint", "startDate", "dueDate", "targetDate", "forecastDate", "actualDate",
 }
 ROLE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -301,9 +302,10 @@ def expand_saved_query(saved: Any, registry: Mapping[str, Any], expected_kind: s
 
 
 class PredicateCompiler:
-    def __init__(self, registry: Mapping[str, Any]) -> None:
+    def __init__(self, registry: Mapping[str, Any], custom_fields_max_depth: int = 1) -> None:
         self.registry = registry
         self.caps = registry["caps"]
+        self.custom_fields_max_depth = custom_fields_max_depth
         self.clauses = 0
 
     def validate(self, clause: Any, path: str = "where", depth: int = 1) -> None:
@@ -408,14 +410,29 @@ class PredicateCompiler:
             params.extend([alias] * len(expressions))
         return "(" + " OR ".join(checks) + ")", params
 
-    @staticmethod
-    def _field_expression(field: str) -> str:
+    def _field_expression(self, field: str) -> str:
         if field == "id": return "id"
         if field == "issueKey": return "issue_key"
         if field == "type": return "type"
         if field == "typeTags": return "type_tags"
         if field == "archived": return "archived"
         if field in {"created", "updated"}: return field
+        if field == "packetId":
+            return f"""(
+                WITH RECURSIVE packet_envelopes(value, depth) AS (
+                    SELECT data, 0
+                    UNION ALL
+                    SELECT json_extract(value, '$.customFields'), depth + 1
+                    FROM packet_envelopes
+                    WHERE depth < {self.custom_fields_max_depth}
+                      AND json_type(value, '$.customFields') = 'object'
+                )
+                SELECT json_extract(value, '$.packetId')
+                FROM packet_envelopes
+                WHERE json_type(value, '$.packetId') IS NOT NULL
+                ORDER BY depth ASC
+                LIMIT 1
+            )"""
         return f"COALESCE(json_extract(data,'$.{field}'),json_extract(data,'$.customFields.{field}'))"
 
 

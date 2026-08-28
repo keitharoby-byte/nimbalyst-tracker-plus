@@ -5,8 +5,8 @@ import path from 'node:path';
 
 const BUNDLE_MANIFEST = 'bundle-manifest.json';
 const BUNDLE_FORMAT_VERSION = 1;
-const SUPPORTED_ADAPTER_VERSION = 11;
-const SUPPORTED_REGISTRY_VERSION = 5;
+const SUPPORTED_ADAPTER_VERSION = 13;
+const SUPPORTED_REGISTRY_VERSION = 6;
 const SNAPSHOT_ATTEMPTS = 20;
 const SNAPSHOT_RETRY_MS = 100;
 const REQUIRED_READER_FILES = new Set([
@@ -180,5 +180,10 @@ export async function prepareReaderSnapshot(
 
 export async function removeReaderSnapshot(snapshot: ReaderSnapshot | null): Promise<void> {
   if (!snapshot) return;
-  await rm(snapshot.directory, { recursive: true, force: true });
+  await rm(snapshot.directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 50,
+  });
 }

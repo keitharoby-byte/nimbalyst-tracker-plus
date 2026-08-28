@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
 LOCKED_OVERRIDE_KEYS = {"relationshipTypes", "scopeRoles", "executableTypes", "caps", "version"}
 OVERRIDABLE_KEYS = {
     "terminalStatuses", "roles", "dispatchPolicy", "dispatchEvidence",
+    "dispatchPosture",
 }
 BUNDLE_MANIFEST = "bundle-manifest.json"
 BUNDLE_FORMAT_VERSION = 1
@@ -45,6 +46,21 @@ DISPATCH_EVIDENCE_SIGNALS: dict[str, str] = {
     "executionConstraint": "string",
     "failureState": "string",
     "supersededBy": "string",
+    "databaseBearing": "boolean",
+}
+DISPATCH_POSTURE_CLASSIFICATIONS: dict[str, set[str]] = {
+    "packetRevision": {"required"},
+    "revisionCurrentness": {"required"},
+    "qaEvidenceRevision": {"required"},
+    "qaStatus": {"required"},
+    "holdState": {"required", "positive-blocker"},
+    "databaseRouteState": {"required", "conditional-required"},
+    "custodyState": {"required", "advisory"},
+    "survivorState": {"required", "advisory"},
+    "collisionState": {"required", "advisory"},
+    "executionConstraint": {"positive-blocker", "advisory"},
+    "failureState": {"positive-blocker"},
+    "supersededBy": {"positive-blocker"},
 }
 
 
@@ -103,6 +119,38 @@ def _validate_dispatch_policy(value: Any) -> bool:
         _string_list(value.get(key), nonempty=key != "admittedUnscopedTypes")
         for key in list_keys
     )
+
+
+def _validate_dispatch_posture(value: Any) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"version", "signals"}
+        or value.get("version") != 1
+        or not isinstance(value.get("signals"), dict)
+        or set(value["signals"]) != set(DISPATCH_POSTURE_CLASSIFICATIONS)
+    ):
+        return False
+    for signal, rule in value["signals"].items():
+        if not isinstance(rule, dict) or not isinstance(rule.get("classification"), str):
+            return False
+        classification = rule["classification"]
+        if classification not in DISPATCH_POSTURE_CLASSIFICATIONS[signal]:
+            return False
+        if classification == "conditional-required":
+            if set(rule) != {"classification", "condition"}:
+                return False
+            condition = rule.get("condition")
+            if (
+                not isinstance(condition, dict)
+                or set(condition) != {"signal", "op", "value"}
+                or condition.get("signal") != "databaseBearing"
+                or condition.get("op") != "eq"
+                or condition.get("value") is not True
+            ):
+                return False
+        elif set(rule) != {"classification"}:
+            return False
+    return True
 
 
 def _bounded_string_value(value: Any, limit: int = 200) -> bool:
@@ -200,6 +248,8 @@ def _validate_registry(value: Any) -> None:
         raise ValueError("savedQueries are invalid")
     if not _validate_dispatch_policy(value.get("dispatchPolicy")):
         raise ValueError("dispatchPolicy is invalid")
+    if not _validate_dispatch_posture(value.get("dispatchPosture")):
+        raise ValueError("dispatchPosture is invalid")
     if not _validate_dispatch_evidence(
         value.get("dispatchEvidence"),
         set(relationships),
@@ -399,6 +449,8 @@ def _validate_override(value: Any, relationship_types: set[str]) -> None:
                 raise ValueError("override role is invalid")
     if "dispatchPolicy" in value and not _validate_dispatch_policy(value["dispatchPolicy"]):
         raise ValueError("override dispatchPolicy is invalid")
+    if "dispatchPosture" in value and not _validate_dispatch_posture(value["dispatchPosture"]):
+        raise ValueError("override dispatchPosture is invalid")
     if "dispatchEvidence" in value and not _validate_dispatch_evidence(
         value["dispatchEvidence"],
         relationship_types,
@@ -425,6 +477,8 @@ def effective_registry(workspace_path: str | Path) -> tuple[dict[str, Any], bool
                 candidate["roles"].update(copy.deepcopy(override["roles"]))
             if "dispatchPolicy" in override:
                 candidate["dispatchPolicy"] = copy.deepcopy(override["dispatchPolicy"])
+            if "dispatchPosture" in override:
+                candidate["dispatchPosture"] = copy.deepcopy(override["dispatchPosture"])
             if "dispatchEvidence" in override:
                 candidate["dispatchEvidence"].update(copy.deepcopy(override["dispatchEvidence"]))
             _validate_registry(candidate)

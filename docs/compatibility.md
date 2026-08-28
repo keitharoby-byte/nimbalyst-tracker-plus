@@ -2,15 +2,15 @@
 
 ## Validated release
 
-- Validation date: 2026-08-26
+- Validation date: 2026-08-27
 - Nimbalyst: 0.72.8 packaged build
-- Extension: Tracker+ 0.16.1
+- Extension: Tracker+ 0.18.0
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows
 - Database backend: SQLite
-- Schema adapter: `tracker-items-normalized-timeline-v11`
-- Registry: version 5
+- Schema adapter: `tracker-items-normalized-timeline-v13`
+- Registry: version 6
 - Saved-query catalog: version 1
 - Python: standard-library `sqlite3`
 
@@ -23,6 +23,11 @@ The adapter requires the `tracker_items` columns listed in
 `reader/contracts.py`. Every successful response includes a SHA-256 schema
 fingerprint derived only from ordered column names and SQLite types. No data
 values contribute to the fingerprint.
+
+The normalized item contract exposes a bounded `packetId` string when present.
+Predicate queries and traversal `nodeWhere` filters accept `eq`, `in`, and
+`exists` for that field, using parameterized, case-insensitive comparisons
+through the effective `customFields` envelope depth.
 
 For read compatibility, the adapter follows up to 128 nested `customFields`
 mapping envelopes by default. Timeline, report, query, and traversal calls may
@@ -47,6 +52,13 @@ Registry version, effective hash, query version, and override state appear in
 result receipts. Workspace query changes do not require rebuilding the
 extension.
 
+Dispatch posture is a complete, versioned workspace override. Its closed
+signal/classification matrix preserves mandatory revision and QA gates while
+allowing supported operational evidence to be required, conditional,
+positive-blocking, or advisory. Invalid, incomplete, unknown, or ambiguous
+postures are rejected atomically. The effective posture and fingerprint appear
+in dispatch query and row receipts.
+
 Paginated traversal fitting accounts for the finalized page and validation
 metadata before accepting a response. Successful pages remain below the
 500-KiB result limit and the 512-KiB process-line ceiling while advancing the
@@ -57,6 +69,11 @@ extension, adapter, and registry versions and the SHA-256 hash of every reader
 asset. A helper starts only from a verified immutable snapshot. During a live
 update it either continues on its already-loaded generation or starts on the
 complete new generation; it never intentionally combines the two.
+
+Reader deadlines are selected by operation and bounded request size. A timed
+out request fails without partial data as `READER_TIMEOUT`, reports only safe
+execution metadata, terminates its helper generation, and permits the next
+request to start cleanly from the same verified bundle.
 
 If the host-visible install directory does not settle on one complete
 generation within the bounded startup window, tools fail closed with

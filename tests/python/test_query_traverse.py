@@ -151,6 +151,33 @@ class QueryTraverseTests(unittest.TestCase):
             "survivor": "unique",
         }
 
+    @staticmethod
+    def _advisory_dispatch_posture() -> dict[str, object]:
+        return {
+            "version": 1,
+            "signals": {
+                "packetRevision": {"classification": "required"},
+                "revisionCurrentness": {"classification": "required"},
+                "qaEvidenceRevision": {"classification": "required"},
+                "qaStatus": {"classification": "required"},
+                "holdState": {"classification": "positive-blocker"},
+                "databaseRouteState": {
+                    "classification": "conditional-required",
+                    "condition": {
+                        "signal": "databaseBearing",
+                        "op": "eq",
+                        "value": True,
+                    },
+                },
+                "custodyState": {"classification": "advisory"},
+                "survivorState": {"classification": "advisory"},
+                "collisionState": {"classification": "advisory"},
+                "executionConstraint": {"classification": "advisory"},
+                "failureState": {"classification": "positive-blocker"},
+                "supersededBy": {"classification": "positive-blocker"},
+            },
+        }
+
     def _assert_graph_page_signals(self, page: dict[str, object]) -> None:
         self.assertIsInstance(page.get("hasMore"), bool)
         has_more = page["nextCursor"] is not None
@@ -167,6 +194,100 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertNotIn("timeline-link", {node["type"] for node in result["nodes"]})
         injection = self.reader.query_items({"workspacePath": self.workspace, "where": {"field": "title", "op": "eq", "value": "' OR 1=1 --"}})
         self.assertEqual(injection["page"]["totalCount"], 0)
+
+    def test_packet_id_is_queryable_and_returned_on_nodes(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self._insert(
+                connection,
+                "packet-direct",
+                "ITEM-PACKET-A",
+                "task",
+                {"title": "Direct packet", "status": "open", "packetId": "packet-alpha"},
+            )
+            self._insert(
+                connection,
+                "packet-custom",
+                "ITEM-PACKET-B",
+                "task",
+                {
+                    "title": "Custom-field packet",
+                    "status": "open",
+                    "customFields": {"packetId": "packet-beta"},
+                },
+            )
+            self._insert(
+                connection,
+                "packet-nested",
+                "ITEM-PACKET-C",
+                "task",
+                {
+                    "title": "Nested packet",
+                    "status": "open",
+                    "customFields": {
+                        "customFields": {"packetId": "packet-gamma"},
+                    },
+                },
+            )
+            connection.commit()
+
+        exact = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "packetId", "op": "eq", "value": "PACKET-ALPHA"},
+        })
+        self.assertEqual([node["id"] for node in exact["nodes"]], ["packet-direct"])
+        self.assertEqual(exact["nodes"][0]["packetId"], "packet-alpha")
+
+        listed = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {
+                "field": "packetId",
+                "op": "in",
+                "value": ["packet-beta", "packet-gamma", "packet-missing"],
+            },
+        })
+        self.assertEqual(
+            {node["id"]: node["packetId"] for node in listed["nodes"]},
+            {
+                "packet-custom": "packet-beta",
+                "packet-nested": "packet-gamma",
+            },
+        )
+
+        present = self.reader.query_items({
+            "workspacePath": self.workspace,
+            "where": {"field": "packetId", "op": "exists", "value": True},
+            "sort": [{"field": "id", "direction": "asc"}],
+        })
+        self.assertEqual(
+            [node["id"] for node in present["nodes"]],
+            ["packet-custom", "packet-direct", "packet-nested"],
+        )
+
+        with self.assertRaises(ReaderError) as raised:
+            self.reader.query_items({
+                "workspacePath": self.workspace,
+                "where": {"field": "packetId", "op": "contains", "value": "packet"},
+            })
+        self.assertEqual(raised.exception.code, "OPERATOR_INVALID")
+
+    def test_packet_id_filters_traversal_members(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                "UPDATE tracker_items SET data=json_set(data, '$.packetId', ?) WHERE id=?",
+                ("packet-member", "member-1"),
+            )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "roots": ["RELEASE-A"],
+            "nodeWhere": {"field": "packetId", "op": "eq", "value": "PACKET-MEMBER"},
+        })
+
+        self.assertIn("member-1", {node["id"] for node in result["nodes"]})
+        self.assertNotIn("member-2", {node["id"] for node in result["nodes"]})
+        member = next(node for node in result["nodes"] if node["id"] == "member-1")
+        self.assertEqual(member["packetId"], "packet-member")
 
     def test_predicate_validation_is_query_local(self) -> None:
         with closing(sqlite3.connect(self.db_path)) as connection:
@@ -2691,6 +2812,114 @@ class QueryTraverseTests(unittest.TestCase):
         })
         self.assertEqual(set(receipt["evidence"]), set(self.reader._registry["dispatchEvidence"]))
         self.assertEqual(len(result["query"]["evidenceMapping"]["fingerprint"]), 64)
+
+    def test_dispatch_posture_supports_advisories_positive_holds_and_conditional_routes(self) -> None:
+        self._write_registry_override({"dispatchPosture": self._advisory_dispatch_posture()})
+        self._write_dispatch_fail_on({"unresolvedEvidence": False})
+        core = {
+            "status": "ready",
+            "packetRevision": "revision-policy",
+            "currentRevision": "revision-policy",
+            "qaEvidenceRevision": "revision-policy",
+            "qaStatus": "passed",
+        }
+        fixtures = {
+            "posture-absent": {"title": "Optional signals absent", **core},
+            "posture-advisory": {
+                "title": "Advisory signals retained",
+                **core,
+                "custodyState": "occupied",
+                "survivorState": "alternate",
+                "collisionState": "overlap",
+                "executionConstraint": "blocked",
+            },
+            "posture-held": {"title": "Positive hold blocks", **core, "holdState": "active"},
+            "posture-database": {
+                "title": "Database route required",
+                **core,
+                "databaseBearing": True,
+            },
+            "posture-qa-mismatch": {
+                "title": "Core QA remains required",
+                **core,
+                "qaEvidenceRevision": "revision-other",
+            },
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            for item_id, fields in fixtures.items():
+                self._insert(connection, item_id, item_id.upper(), "task", fields)
+                self._link(
+                    connection,
+                    f"{item_id}-membership",
+                    f"REL-{item_id.upper()}",
+                    item_id,
+                    "launch-1",
+                    "part-of-launch",
+                    scope_role="core",
+                )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        })
+
+        self.assertEqual(
+            [node["id"] for node in result["nodes"]],
+            ["posture-absent", "posture-advisory"],
+        )
+        receipts = {receipt["itemId"]: receipt for receipt in result["receipts"]}
+        advisory = receipts["posture-advisory"]["signalPosture"]
+        for signal in ("custodyState", "survivorState", "collisionState", "executionConstraint"):
+            self.assertEqual(advisory[signal]["classification"], "advisory")
+            self.assertEqual(advisory[signal]["disposition"], "advisory")
+            self.assertEqual(advisory[signal]["source"], {"kind": "field", "field": signal})
+        self.assertEqual(advisory["custodyState"]["value"], "occupied")
+        self.assertIn("hold-not-clear", receipts["posture-held"]["exclusionReasons"])
+        conditional = receipts["posture-database"]["signalPosture"]["databaseRouteState"]
+        self.assertTrue(conditional["condition"]["matched"])
+        self.assertEqual(conditional["condition"]["evidence"]["value"], True)
+        self.assertIn(
+            "database-route-inadmissible",
+            receipts["posture-database"]["exclusionReasons"],
+        )
+        self.assertIn(
+            "qa-evidence-revision-mismatch",
+            receipts["posture-qa-mismatch"]["exclusionReasons"],
+        )
+        self.assertEqual(result["query"]["dispatchPosture"]["version"], 1)
+        self.assertEqual(
+            result["query"]["dispatchPosture"]["signals"]["custodyState"]["classification"],
+            "advisory",
+        )
+        self.assertEqual(len(result["query"]["dispatchPosture"]["fingerprint"]), 64)
+
+        blocking_posture = self._advisory_dispatch_posture()
+        blocking_posture["signals"]["executionConstraint"] = {
+            "classification": "positive-blocker",
+        }
+        self._write_registry_override({"dispatchPosture": blocking_posture})
+        blocked_result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        })
+        self.assertNotEqual(
+            result["query"]["queryFingerprint"],
+            blocked_result["query"]["queryFingerprint"],
+        )
+        blocked_receipts = {
+            receipt["itemId"]: receipt for receipt in blocked_result["receipts"]
+        }
+        self.assertIn(
+            "execution-blocked",
+            blocked_receipts["posture-advisory"]["exclusionReasons"],
+        )
 
     def test_dispatch_evidence_mapping_supports_normalized_relationship_sources(self) -> None:
         self._write_registry_override({
