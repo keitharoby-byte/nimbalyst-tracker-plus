@@ -203,7 +203,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
   },
   {
     name: TOOL_TRAVERSE,
-    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved query. If a standard traversal returns RESULT_TRUNCATED, retry the identical request with paginate=true; then automatically repeat it with cursor=page.nextCursor and aggregate nodes, boundaryNodes, and edges until page.hasMore and page.continuationRequired are both false. Both booleans are derived from page.nextCursor. Never interpret one paged fragment as the complete graph. Dispatch and composed modes remain fail closed and do not support pagination. This tool never writes tracker data.',
+    description: 'Traverse the normalized current-workspace tracker graph from bounded roots or a saved query. For standard or dispatch traversal, set paginate=true, then automatically repeat the identical request with cursor=page.nextCursor and aggregate nodes, receipts, excluded rows, boundaryNodes, and edges until page.hasMore and page.continuationRequired are both false. Both booleans are derived from page.nextCursor. Validation and dispatch admission are computed against the complete result before any page is returned. Never interpret one paged fragment as the complete graph. Composed mode remains fail closed and does not support pagination. This tool never writes tracker data.',
     scope: 'global',
     inputSchema: {
       type: 'object',
@@ -215,7 +215,7 @@ const TOOL_DESCRIPTORS: McpToolDescriptor[] = [
         limits: { type: 'object' },
         failOn: { type: 'object' },
         savedQuery: { type: 'object' },
-        paginate: { type: 'boolean', default: false, description: 'For standard traversals, treat maxNodes and maxEdges as safe page sizes and expose an opaque continuation cursor instead of failing on truncation.' },
+        paginate: { type: 'boolean', default: false, description: 'For standard or dispatch traversals, expose a byte-safe page and opaque continuation cursor. For dispatch, maxNodes bounds detailed receipts per page and admission is still evaluated globally.' },
         cursor: { type: 'string', description: 'Opaque page.nextCursor from the preceding paged traversal. Keep every other argument identical.' },
         maxCustomFieldsDepth: TIMELINE_PROPERTIES.maxCustomFieldsDepth,
       },

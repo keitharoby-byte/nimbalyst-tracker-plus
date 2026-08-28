@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.18.0. This document describes only the
+Accepted; amended for Tracker+ 0.18.1. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -141,7 +141,8 @@ boundary, node-filter, and fail-on rules. When one standard traversal result
 exceeds a node, edge, or response page, an opt-in cursor binds continuation to
 the selected node/edge identity so agents can aggregate the complete graph
 without raising the per-response cap. Dispatch and composed traversals remain
-atomic and fail closed instead of paging.
+atomic in their evaluation. Dispatch may page the already-complete logical
+result; composed traversal still fails closed instead of paging.
 
 `packetId` is a public normalized item field. Predicate queries and traversal
 member filters allow `eq`, `in`, and `exists`; comparisons are parameterized
@@ -165,6 +166,14 @@ parameters, and query fingerprint.
 Every query and traversal page includes boolean `hasMore`. It is true exactly
 when `nextCursor` is non-null and is identical to `continuationRequired`.
 `resultsComplete` is true only when `hasMore` and `truncated` are both false.
+
+Dispatch pagination streams one ordered receipt/boundary sequence and one edge
+sequence behind a cursor bound to the complete result fingerprint. Admission,
+evidence completeness, validation, ordering, totals, and launch rollups are
+computed globally before page one. Consumers aggregate candidates, detailed
+receipts, compact exclusions, boundaries, and edges through the terminal page.
+Detailed receipts are top-level only and are not duplicated inside normalized
+candidate nodes.
 
 For paginated traversal, the fixed response envelope is finalized before byte
 fitting. Cursor and completion fields plus validation completeness participate

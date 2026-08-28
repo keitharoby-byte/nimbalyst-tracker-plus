@@ -478,6 +478,22 @@ receipts, and returns independently complete candidates with trustworthy
 totals. `query.unresolvedEvidenceDisposition` reports `terminal` or
 `exclude-row`. Every `failOn` value must be a JSON boolean.
 
+For a dispatch result that may exceed one response, set `paginate: true` on
+`native_tracker_traverse`. Repeat the identical saved-query request with each
+opaque `page.nextCursor` and aggregate `nodes`, `receipts`, `excluded`,
+`boundaryNodes`, and `edges` until `page.hasMore` and
+`page.continuationRequired` are both false. `limits.maxNodes` bounds detailed
+receipt/boundary entities per page and `limits.maxEdges` bounds edges; byte
+fitting may return fewer. Admission, validation, ordering, totals, and the
+result fingerprint are global and complete before page one. A changed logical
+result invalidates the cursor rather than mixing generations.
+
+Detailed receipts appear only in the top-level `receipts` array. Candidate
+nodes remain normalized tracker nodes and do not duplicate a
+`dispatchReceipt`. On an oversized request without pagination,
+`RESULT_TRUNCATED` returns no candidates, consistent incomplete flags, and a
+`recovery.paginate: true` instruction.
+
 The full `dispatchPolicy` object is workspace-overridable. Overrides replace
 the object, so include every key:
 

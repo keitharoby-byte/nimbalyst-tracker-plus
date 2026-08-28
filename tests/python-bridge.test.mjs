@@ -59,7 +59,7 @@ for line in sys.stdin:
   }
   const identity = {
     extensionVersion: '9.9.9',
-    adapterVersion: 13,
+    adapterVersion: 14,
     registryVersion: 6,
     files,
   };

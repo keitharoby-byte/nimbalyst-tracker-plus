@@ -52,6 +52,16 @@ the timed-out helper is terminated and the next request starts cleanly. If the
 same bounded request repeatedly times out, reduce its page or traversal limits
 or capture the safe diagnostic and extension logs for investigation.
 
+## Dispatch `RESULT_TRUNCATED`
+
+The complete dispatch result exceeded one safe response and the request did
+not opt into pagination. Retry the identical saved query with `paginate: true`,
+then follow every opaque `page.nextCursor`. Aggregate `nodes`, `receipts`,
+`excluded`, `boundaryNodes`, and `edges` until both `page.hasMore` and
+`page.continuationRequired` are false. Do not treat an intermediate page as the
+complete candidate set. If the cursor is rejected, the logical result changed;
+restart from page one rather than combining generations.
+
 ## Tools are absent
 
 Confirm that the extension is enabled and consent was granted for the relevant

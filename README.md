@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.18.0 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.18.1 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,19 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.18.0
+## What's new in 0.18.1
+
+Large dispatch results can now be retrieved completely with `paginate=true`.
+Follow each opaque `page.nextCursor` and aggregate `nodes`, `receipts`,
+`excluded`, `boundaryNodes`, and `edges` until `page.hasMore` is false. Global
+admission, validation, ordering, totals, and fingerprints are computed before
+the first page, so paging changes delivery size rather than eligibility.
+
+Detailed receipts are emitted once at the top level instead of being repeated
+inside candidate nodes. Oversized non-paged responses now return consistent
+completion flags and direct pagination recovery guidance.
+
+## Previously in 0.18.0
 
 Native-reader deadlines now adapt to the operation and its bounded page or
 graph size. A timeout reports its method, configured deadline, elapsed phase,

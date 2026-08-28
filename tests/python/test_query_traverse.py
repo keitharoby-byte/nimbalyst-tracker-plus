@@ -2476,6 +2476,104 @@ class QueryTraverseTests(unittest.TestCase):
         self.assertEqual(result["page"]["detailedReceiptCount"], 1)
         self.assertLess(self.reader._json_size(result), 500 * 1024)
 
+    def test_dispatch_pagination_preserves_large_candidate_and_receipt_sets(self) -> None:
+        expected_ids = [f"dispatch-page-{index:02d}" for index in range(64)]
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            for index, item_id in enumerate(expected_ids):
+                self._insert(
+                    connection,
+                    item_id,
+                    f"ITEM-PAGE-{index:02d}",
+                    "task",
+                    {
+                        **self._ready_dispatch_fields(),
+                        "title": f"Paged dispatch packet {index:02d}",
+                        "branch": f"generic-branch-{index:02d}-" + ("x" * 400),
+                    },
+                )
+                self._link(
+                    connection,
+                    f"{item_id}-membership",
+                    f"REL-PAGE-{index:02d}",
+                    item_id,
+                    "launch-1",
+                    "part-of-launch",
+                    scope_role="core",
+                )
+            connection.commit()
+
+        base_request = {
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        }
+        response_limit = 25_000
+        with patch("reader.database.MAX_RESULT_BYTES", response_limit):
+            with self.assertRaises(ReaderError) as raised:
+                self.reader.traverse_graph(base_request)
+            self.assertEqual(raised.exception.code, "RESULT_TRUNCATED")
+            terminal = raised.exception.details["receipt"]
+            self.assertEqual(terminal["candidates"], [])
+            self.assertTrue(terminal["page"]["truncated"])
+            self.assertTrue(terminal["page"]["responseTruncated"])
+            self.assertFalse(terminal["page"]["resultsComplete"])
+            self.assertFalse(terminal["page"]["hasMore"])
+            self.assertFalse(terminal["page"]["continuationRequired"])
+            self.assertEqual(terminal["recovery"], {"paginate": True, "cursor": None})
+
+            cursor = None
+            first_cursor = None
+            page_count = 0
+            node_ids: list[str] = []
+            receipt_ids: list[str] = []
+            edge_ids: list[str] = []
+            while True:
+                request = {**base_request, "paginate": True}
+                if cursor is not None:
+                    request["cursor"] = cursor
+                page = self.reader.traverse_graph(request)
+                page_count += 1
+                self.assertLessEqual(self.reader._json_size(page), response_limit)
+                self._assert_graph_page_signals(page["page"])
+                self.assertEqual(
+                    page["page"]["returnedReceiptCount"],
+                    len(page["receipts"]),
+                )
+                self.assertNotIn("dispatchReceipt", json.dumps(page["nodes"]))
+                node_ids.extend(node["id"] for node in page["nodes"])
+                receipt_ids.extend(receipt["itemId"] for receipt in page["receipts"])
+                edge_ids.extend(edge["id"] for edge in page["edges"])
+                cursor = page["page"]["nextCursor"]
+                if first_cursor is None:
+                    first_cursor = cursor
+                if cursor is None:
+                    break
+
+            self.assertGreater(page_count, 1)
+            self.assertEqual(node_ids, expected_ids)
+            self.assertEqual(receipt_ids, expected_ids)
+            self.assertTrue(
+                {f"dispatch-page-{index:02d}-membership" for index in range(64)}
+                .issubset(edge_ids)
+            )
+            self.assertIsNotNone(first_cursor)
+
+            with closing(sqlite3.connect(self.db_path)) as connection:
+                connection.execute(
+                    "UPDATE tracker_items SET updated=? WHERE id=?",
+                    ("2026-08-28T00:00:00Z", expected_ids[0]),
+                )
+                connection.commit()
+            with self.assertRaises(ReaderError) as changed:
+                self.reader.traverse_graph({
+                    **base_request,
+                    "paginate": True,
+                    "cursor": first_cursor,
+                })
+            self.assertEqual(changed.exception.code, "CURSOR_INVALID")
+
     def test_dispatch_incomplete_evidence_returns_terminal_empty_receipt(self) -> None:
         with closing(sqlite3.connect(self.db_path)) as connection:
             self._insert(connection, "dispatch-incomplete", "NIM-DISPATCH-I", "task", {

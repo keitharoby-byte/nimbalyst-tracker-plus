@@ -2,14 +2,14 @@
 
 ## Validated release
 
-- Validation date: 2026-08-27
+- Validation date: 2026-08-28
 - Nimbalyst: 0.72.8 packaged build
-- Extension: Tracker+ 0.18.0
+- Extension: Tracker+ 0.18.1
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows
 - Database backend: SQLite
-- Schema adapter: `tracker-items-normalized-timeline-v13`
+- Schema adapter: `tracker-items-normalized-timeline-v14`
 - Registry: version 6
 - Saved-query catalog: version 1
 - Python: standard-library `sqlite3`
@@ -63,6 +63,13 @@ Paginated traversal fitting accounts for the finalized page and validation
 metadata before accepting a response. Successful pages remain below the
 500-KiB result limit and the 512-KiB process-line ceiling while advancing the
 opaque cursor whenever at least one leading entity fits.
+
+Dispatch traversal supports opt-in pagination. Admission, validation, evidence
+completeness, ordering, totals, and the result fingerprint are computed over
+the complete logical result before paging. The cursor binds receipt/boundary
+and edge offsets to that complete result. Each page stays within the response
+cap, emits each detailed receipt only once at the top level, and exposes
+consistent completion and response-fitting flags.
 
 Native reader assets are generation-locked. `bundle-manifest.json` records the
 extension, adapter, and registry versions and the SHA-256 hash of every reader

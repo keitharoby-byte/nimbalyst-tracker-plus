@@ -1013,12 +1013,49 @@ class NativeTrackerReader:
                 },
             }
             if definition.get("mode") == "dispatch-eligible-work-v1":
-                if params.get("paginate") or params.get("cursor") is not None:
-                    raise ReaderError("QUERY_INVALID", "Dispatch traversal does not support pagination.")
+                paginate = params.get("paginate", False)
+                cursor = params.get("cursor")
+                if not isinstance(paginate, bool):
+                    raise ReaderError("QUERY_INVALID", "paginate must be a boolean.")
+                if cursor is not None and (
+                    not paginate or not isinstance(cursor, str) or not cursor
+                ):
+                    raise ReaderError(
+                        "CURSOR_INVALID",
+                        "Dispatch cursor requires paginate=true and an opaque non-empty cursor.",
+                    )
+                limits = params.get("limits", {})
+                caps = self._registry["caps"]
+                if not isinstance(limits, Mapping) or set(limits) - {"maxNodes", "maxEdges"}:
+                    raise ReaderError("QUERY_INVALID", "limits is invalid.")
+                max_receipts = limits.get("maxNodes", caps["traverseNodesMax"])
+                max_edges = limits.get("maxEdges", caps["traverseEdgesMax"])
+                if (
+                    isinstance(max_receipts, bool)
+                    or not isinstance(max_receipts, int)
+                    or not 1 <= max_receipts <= caps["traverseNodesMax"]
+                ):
+                    raise ReaderError(
+                        "QUERY_TOO_COMPLEX",
+                        f"maxNodes must be at most {caps['traverseNodesMax']}.",
+                    )
+                if (
+                    isinstance(max_edges, bool)
+                    or not isinstance(max_edges, int)
+                    or not 1 <= max_edges <= caps["traverseEdgesMax"]
+                ):
+                    raise ReaderError(
+                        "QUERY_TOO_COMPLEX",
+                        f"maxEdges must be at most {caps['traverseEdgesMax']}.",
+                    )
                 return self._dispatch_eligible_work(
                     workspace_path,
                     query_echo,
                     started,
+                    paginate=paginate,
+                    cursor=cursor,
+                    max_receipts=max_receipts,
+                    max_edges=max_edges,
                 )
             if definition.get("mode") == "composed-v1":
                 if params.get("paginate") or params.get("cursor") is not None:
@@ -1555,6 +1592,11 @@ class NativeTrackerReader:
         workspace_path: str,
         query_echo: Mapping[str, Any],
         started: float,
+        *,
+        paginate: bool = False,
+        cursor: Any = None,
+        max_receipts: int = 500,
+        max_edges: int = 1_000,
     ) -> dict[str, Any]:
         """Resolve one deterministic, fail-closed dispatch candidate set."""
         policy = self._registry["dispatchPolicy"]
@@ -2399,11 +2441,7 @@ class NativeTrackerReader:
             items_by_id,
         )
         receipt_by_id = {receipt["itemId"]: receipt for receipt in receipts}
-        nodes: list[dict[str, Any]] = []
-        for item_id in ordered_ids:
-            node = dict(items_by_id[item_id])
-            node["dispatchReceipt"] = receipt_by_id[item_id]
-            nodes.append(node)
+        nodes = [self._public_graph_item(items_by_id[item_id]) for item_id in ordered_ids]
         boundary_ids = sorted(
             selected_item_ids - {receipt["itemId"] for receipt in receipts}
         )
@@ -2414,27 +2452,59 @@ class NativeTrackerReader:
             ]
             key = launch_ids[0] if launch_ids else "unscoped"
             launch_totals[key] = launch_totals.get(key, 0) + 1
+        receipt_stream = [
+            receipt_by_id[item_id]
+            for item_id in ordered_ids
+        ] + sorted(
+            [
+                receipt for receipt in receipts
+                if not receipt["included"]
+            ],
+            key=lambda receipt: (
+                str(receipt.get("issueKey") or ""),
+                receipt["itemId"],
+            ),
+        )
+        boundary_stream = [
+            self._public_graph_item(items_by_id[item_id])
+            for item_id in boundary_ids
+            if item_id in items_by_id
+        ]
+        result_fingerprint = self._stable_fingerprint({
+            "queryFingerprint": query_receipt["queryFingerprint"],
+            "nodes": nodes,
+            "receipts": receipt_stream,
+            "boundaryNodes": boundary_stream,
+            "edges": selected_edge_list,
+        })
+        query_receipt["resultFingerprint"] = result_fingerprint
+        result_base = {
+            "launchTotals": dict(sorted(launch_totals.items())),
+            "admission": admission_receipt,
+            "validation": validation,
+            "watermark": watermark,
+            "query": query_receipt,
+        }
+        if paginate:
+            return self._fit_paginated_dispatch_result(
+                result_base,
+                receipt_stream,
+                {node["id"]: node for node in nodes},
+                boundary_stream,
+                selected_edge_list,
+                cursor,
+                max_receipts,
+                max_edges,
+                len(source_items),
+                len(pre_admission_exclusions),
+                result_fingerprint,
+            )
+
         result = {
             "nodes": nodes,
             "edges": selected_edge_list,
-            "boundaryNodes": [
-                items_by_id[item_id]
-                for item_id in boundary_ids
-                if item_id in items_by_id
-            ],
-            "receipts": [
-                receipt_by_id[item_id]
-                for item_id in ordered_ids
-            ] + sorted(
-                [
-                    receipt for receipt in receipts
-                    if not receipt["included"]
-                ],
-                key=lambda receipt: (
-                    str(receipt.get("issueKey") or ""),
-                    receipt["itemId"],
-                ),
-            ),
+            "boundaryNodes": boundary_stream,
+            "receipts": receipt_stream,
             "excluded": sorted(
                 [
                     {
@@ -2450,38 +2520,223 @@ class NativeTrackerReader:
                     receipt["itemId"],
                 ),
             ),
-            "launchTotals": dict(sorted(launch_totals.items())),
-            "admission": admission_receipt,
             "page": {
                 "totalCount": len(nodes),
+                "totalEdgeCount": len(selected_edge_list),
                 "candidateCount": len(nodes),
                 "inspectedCount": len(source_items),
                 "detailedReceiptCount": len(receipts),
                 "preAdmissionExcludedCount": len(pre_admission_exclusions),
                 "returnedCount": len(nodes),
+                "returnedReceiptCount": len(receipt_stream),
+                "returnedBoundaryCount": len(boundary_stream),
+                "returnedEdgeCount": len(selected_edge_list),
+                "hasMore": False,
                 "nextCursor": None,
                 "truncated": False,
+                "resultsComplete": True,
+                "continuationRequired": False,
+                "responseTruncated": False,
             },
-            "validation": validation,
-            "watermark": watermark,
-            "query": query_receipt,
+            **result_base,
         }
         if self._json_size(result) > MAX_RESULT_BYTES:
-            terminal_receipt["page"]["truncated"] = True
+            terminal_receipt["page"].update({
+                "hasMore": False,
+                "truncated": True,
+                "resultsComplete": False,
+                "continuationRequired": False,
+                "responseTruncated": True,
+            })
+            terminal_receipt["recovery"] = {
+                "paginate": True,
+                "cursor": None,
+            }
             raise ReaderError(
                 "RESULT_TRUNCATED",
-                "Dispatch eligibility response size invalidated the candidate set.",
+                "The complete dispatch response exceeded one safe page. Retry with paginate=true and follow every page.nextCursor.",
                 {"receipt": terminal_receipt},
             )
-        fitted = self._fit_graph_result(result)
-        if fitted["page"]["truncated"]:
-            terminal_receipt["page"]["truncated"] = True
+        return result
+
+    @staticmethod
+    def _public_graph_item(item: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: copy.deepcopy(value)
+            for key, value in item.items()
+            if not key.startswith("_")
+        }
+
+    @staticmethod
+    def _encode_dispatch_cursor(
+        result_fingerprint: str,
+        entity_offset: int,
+        edge_offset: int,
+    ) -> str:
+        payload = {
+            "v": 1,
+            "k": "d1",
+            "r": result_fingerprint,
+            "o": entity_offset,
+            "e": edge_offset,
+        }
+        return base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_dispatch_cursor(
+        raw: Any,
+        result_fingerprint: str,
+        entity_total: int,
+        edge_total: int,
+    ) -> tuple[int, int]:
+        if raw is None:
+            return 0, 0
+        if not isinstance(raw, str):
+            raise ReaderError("CURSOR_INVALID", "Dispatch cursor must be opaque text.")
+        try:
+            payload = json.loads(
+                base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+            )
+        except (ValueError, UnicodeError, json.JSONDecodeError, binascii.Error):
+            raise ReaderError("CURSOR_INVALID", "The dispatch cursor is invalid.") from None
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("v") != 1
+            or payload.get("k") != "d1"
+            or payload.get("r") != result_fingerprint
+            or isinstance(payload.get("o"), bool)
+            or not isinstance(payload.get("o"), int)
+            or isinstance(payload.get("e"), bool)
+            or not isinstance(payload.get("e"), int)
+            or not 0 <= payload["o"] <= entity_total
+            or not 0 <= payload["e"] <= edge_total
+            or (payload["o"] == entity_total and payload["e"] == edge_total)
+        ):
             raise ReaderError(
-                "RESULT_TRUNCATED",
-                "Dispatch eligibility response truncation invalidated the candidate set.",
-                {"receipt": terminal_receipt},
+                "CURSOR_INVALID",
+                "The dispatch cursor does not match the current complete result.",
             )
-        return fitted
+        return payload["o"], payload["e"]
+
+    def _fit_paginated_dispatch_result(
+        self,
+        result_base: Mapping[str, Any],
+        receipt_stream: list[dict[str, Any]],
+        candidate_by_id: Mapping[str, dict[str, Any]],
+        boundary_stream: list[dict[str, Any]],
+        edge_stream: list[dict[str, Any]],
+        cursor: Any,
+        max_entities: int,
+        max_edges: int,
+        inspected_count: int,
+        pre_admission_excluded_count: int,
+        result_fingerprint: str,
+    ) -> dict[str, Any]:
+        entity_stream: list[tuple[str, dict[str, Any]]] = [
+            ("receipt", receipt) for receipt in receipt_stream
+        ] + [("boundary", node) for node in boundary_stream]
+        entity_offset, edge_offset = self._decode_dispatch_cursor(
+            cursor,
+            result_fingerprint,
+            len(entity_stream),
+            len(edge_stream),
+        )
+        page_entities = entity_stream[entity_offset:entity_offset + max_entities]
+        page_edges = edge_stream[edge_offset:edge_offset + max_edges]
+        response_truncated = False
+
+        def materialize() -> dict[str, Any]:
+            page_receipts = [
+                value for kind, value in page_entities if kind == "receipt"
+            ]
+            page_boundaries = [
+                value for kind, value in page_entities if kind == "boundary"
+            ]
+            page_nodes = [
+                candidate_by_id[receipt["itemId"]]
+                for receipt in page_receipts
+                if receipt["included"]
+            ]
+            page_excluded = [
+                {
+                    "itemId": receipt["itemId"],
+                    "issueKey": receipt.get("issueKey"),
+                    "exclusionReasons": receipt["exclusionReasons"],
+                }
+                for receipt in page_receipts
+                if not receipt["included"]
+            ]
+            next_entity_offset = entity_offset + len(page_entities)
+            next_edge_offset = edge_offset + len(page_edges)
+            continuation_required = (
+                next_entity_offset < len(entity_stream)
+                or next_edge_offset < len(edge_stream)
+            )
+            return {
+                "nodes": page_nodes,
+                "edges": page_edges,
+                "boundaryNodes": page_boundaries,
+                "receipts": page_receipts,
+                "excluded": page_excluded,
+                "page": {
+                    "totalCount": len(candidate_by_id),
+                    "totalEdgeCount": len(edge_stream),
+                    "candidateCount": len(candidate_by_id),
+                    "inspectedCount": inspected_count,
+                    "detailedReceiptCount": len(receipt_stream),
+                    "preAdmissionExcludedCount": pre_admission_excluded_count,
+                    "returnedCount": len(page_nodes),
+                    "returnedReceiptCount": len(page_receipts),
+                    "returnedBoundaryCount": len(page_boundaries),
+                    "returnedEdgeCount": len(page_edges),
+                    "hasMore": continuation_required,
+                    "nextCursor": (
+                        self._encode_dispatch_cursor(
+                            result_fingerprint,
+                            next_entity_offset,
+                            next_edge_offset,
+                        )
+                        if continuation_required
+                        else None
+                    ),
+                    "truncated": continuation_required,
+                    "resultsComplete": not continuation_required,
+                    "continuationRequired": continuation_required,
+                    "responseTruncated": response_truncated,
+                },
+                **copy.deepcopy(dict(result_base)),
+            }
+
+        result = materialize()
+        while self._json_size(result) > MAX_RESULT_BYTES and (
+            page_edges or page_entities
+        ):
+            response_truncated = True
+            if page_edges:
+                page_edges.pop()
+            else:
+                page_entities.pop()
+            result = materialize()
+        if self._json_size(result) > MAX_RESULT_BYTES or (
+            not page_entities
+            and not page_edges
+            and (
+                entity_offset < len(entity_stream)
+                or edge_offset < len(edge_stream)
+            )
+        ):
+            raise ReaderError(
+                "RESPONSE_TOO_LARGE",
+                "One dispatch entity cannot fit within the safe response limit.",
+                {
+                    "entityOffset": entity_offset,
+                    "edgeOffset": edge_offset,
+                    "resultFingerprint": result_fingerprint,
+                },
+            )
+        return result
 
     def _resolve_dispatch_evidence(
         self,

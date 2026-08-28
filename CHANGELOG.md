@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.18.1 - 2026-08-28
+
+- Add byte-fitted, cursor-bound pagination to dispatch traversal while keeping
+  admission, evidence completeness, validation, ordering, totals, and result
+  identity evaluated against the complete logical result.
+- Return each detailed dispatch receipt once at the top level instead of also
+  duplicating it inside its candidate node, preserving the normalized node
+  contract and reducing response size.
+- Make oversized non-paged dispatch errors internally consistent and include
+  explicit `paginate=true` recovery guidance. Intermediate pages now keep
+  `hasMore`, `nextCursor`, `truncated`, `resultsComplete`,
+  `continuationRequired`, and `responseTruncated` coherent.
+- Advance the public reader contract to schema adapter version 14.
+
 ## 0.18.0 - 2026-08-27
 
 - Scale native-reader deadlines by operation and bounded request size, return

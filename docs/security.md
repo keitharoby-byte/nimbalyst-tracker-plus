@@ -59,7 +59,12 @@ backends disabled until the user approves their first-use native-code prompts.
   returning a page. Predicate queries and opt-in standard
   traversals can retrieve a complete logical result through opaque,
   identity-bound continuation cursors without raising that per-response limit.
-  Dispatch and composed traversals remain atomic and fail closed on truncation.
+  Composed traversals remain atomic and fail closed on truncation. Non-paged
+  dispatch also fails closed when the complete result cannot fit one response.
+- Dispatch pagination preserves atomic admission: the complete logical result
+  is validated and fingerprinted before a page is emitted. Opaque cursors bind
+  receipt/boundary and edge offsets to that result, reject changed results, and
+  never authorize a candidate independently of the complete evaluation.
 - The helper rejects input lines over 64 KiB and uses bounded, operation-aware
   deadlines scaled by requested page or graph size. A timeout fails closed with
   no partial result, records only the method, configured deadline, execution

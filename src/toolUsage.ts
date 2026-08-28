@@ -45,8 +45,8 @@ const TOOL_USAGE: Record<string, Record<string, unknown>> = {
   },
   native_tracker_traverse: {
     chooseExactlyOne: ['roots', 'savedQuery'],
-    constraints: ['roots contains 1..8 identifiers', 'cursor requires paginate=true', `maxCustomFieldsDepth is 1..${MAX_CUSTOM_FIELDS_DEPTH}`],
-    example: { roots: ['ITEM-123'], paginate: true, maxCustomFieldsDepth: DEFAULT_CUSTOM_FIELDS_DEPTH },
+    constraints: ['roots contains 1..8 identifiers', 'cursor requires paginate=true', 'dispatch pagination aggregates receipts as well as graph entities', `maxCustomFieldsDepth is 1..${MAX_CUSTOM_FIELDS_DEPTH}`],
+    example: { savedQuery: { id: 'workspace-query', params: {} }, paginate: true, maxCustomFieldsDepth: DEFAULT_CUSTOM_FIELDS_DEPTH },
   },
 };
 
