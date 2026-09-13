@@ -49,9 +49,9 @@ DISPATCH_EVIDENCE_SIGNALS: dict[str, str] = {
     "databaseBearing": "boolean",
 }
 DISPATCH_POSTURE_CLASSIFICATIONS: dict[str, set[str]] = {
-    "packetRevision": {"required"},
-    "revisionCurrentness": {"required"},
-    "qaEvidenceRevision": {"required"},
+    "packetRevision": {"required", "advisory"},
+    "revisionCurrentness": {"required", "advisory"},
+    "qaEvidenceRevision": {"required", "advisory"},
     "qaStatus": {"required"},
     "holdState": {"required", "positive-blocker"},
     "databaseRouteState": {"required", "conditional-required"},

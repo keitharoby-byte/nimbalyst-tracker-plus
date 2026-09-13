@@ -569,9 +569,11 @@ the mapping. `includeUnscoped=true` with an empty
 `admittedUnscopedTypes` list is rejected as `UNSCOPED_WORK_NOT_CONFIGURED`.
 
 `dispatchPosture` is a complete, versioned workspace override. It uses a
-closed signal/classification matrix: revision and QA signals remain
-`required`; supported operational signals may use only their allowlisted
-`required`, `conditional-required`, `positive-blocker`, or `advisory` posture.
+closed signal/classification matrix. `packetRevision`,
+`revisionCurrentness`, and `qaEvidenceRevision` may be `required` or
+`advisory`; `qaStatus` remains required. Supported operational signals may use
+only their allowlisted `required`, `conditional-required`,
+`positive-blocker`, or `advisory` posture.
 Conditional database routing must use the explicit `databaseBearing=true`
 predicate. Unknown signals, missing signals, forbidden downgrades, ambiguous
 conditions, and conflicting shapes reject the entire override.
@@ -606,6 +608,14 @@ admission/advisory disposition, active state, value, and trusted source. A
 conditional signal also records its predicate, match result, and evidence.
 `query.dispatchPosture` exposes the effective policy and fingerprint, and the
 posture participates in `queryFingerprint`.
+
+When revision evidence is advisory, missing values and revision mismatches do
+not add admission-exclusion reasons or make evidence incomplete. Present and
+derived values remain in `signalPosture` with their trusted source and an
+`advisory` disposition. This does not relax QA PASS, positive holds,
+supersession, hard dependencies, workflow/type, scope, conditional database
+routing, or query-wide fail-closed validation. The bundled posture keeps all
+three revision signals required for backward compatibility.
 
 ### Extending the role catalog
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import shutil
@@ -165,6 +166,32 @@ class RegistryTests(unittest.TestCase):
                 self.assertFalse(active)
                 self.assertIsNotNone(error)
                 self.assertEqual(registry["dispatchPosture"], default_posture)
+
+    def test_dispatch_posture_accepts_advisory_revision_evidence(self) -> None:
+        default_posture = json.loads(
+            (ROOT / "reader" / "registry.json").read_text(encoding="utf-8")
+        )["dispatchPosture"]
+        advisory_posture = copy.deepcopy(default_posture)
+        for signal in (
+            "packetRevision",
+            "revisionCurrentness",
+            "qaEvidenceRevision",
+        ):
+            advisory_posture["signals"][signal] = {"classification": "advisory"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".nimbalyst").mkdir()
+            (root / ".nimbalyst" / "tracker-plus.registry.json").write_text(
+                json.dumps({"dispatchPosture": advisory_posture}),
+                encoding="utf-8",
+            )
+
+            registry, active, error, _registry_hash = effective_registry(root)
+
+            self.assertTrue(active)
+            self.assertIsNone(error)
+            self.assertEqual(registry["dispatchPosture"], advisory_posture)
 
     def test_missing_query_catalog_has_no_saved_queries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -3019,6 +3019,109 @@ class QueryTraverseTests(unittest.TestCase):
             blocked_receipts["posture-advisory"]["exclusionReasons"],
         )
 
+    def test_dispatch_posture_allows_revision_evidence_to_be_advisory(self) -> None:
+        posture = self._advisory_dispatch_posture()
+        for signal in (
+            "packetRevision",
+            "revisionCurrentness",
+            "qaEvidenceRevision",
+        ):
+            posture["signals"][signal] = {"classification": "advisory"}
+        self._write_registry_override({"dispatchPosture": posture})
+        self._write_dispatch_fail_on({"unresolvedEvidence": False})
+        fixtures = {
+            "revision-advisory-absent": {
+                "title": "QA alone admits without revision evidence",
+                "status": "ready",
+                "qaStatus": "passed",
+            },
+            "revision-advisory-present": {
+                "title": "Mismatched revision evidence remains visible",
+                "status": "ready",
+                "packetRevision": "revision-1",
+                "currentRevision": "revision-2",
+                "qaEvidenceRevision": "revision-3",
+                "qaStatus": "passed",
+            },
+            "revision-advisory-no-qa": {
+                "title": "QA remains required",
+                "status": "ready",
+            },
+            "revision-advisory-held": {
+                "title": "Positive hold remains blocking",
+                "status": "ready",
+                "qaStatus": "passed",
+                "holdState": "active",
+            },
+        }
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            for item_id, fields in fixtures.items():
+                self._insert(connection, item_id, item_id.upper(), "task", fields)
+                self._link(
+                    connection,
+                    f"{item_id}-membership",
+                    f"REL-{item_id.upper()}",
+                    item_id,
+                    "launch-1",
+                    "part-of-launch",
+                    scope_role="core",
+                )
+            connection.commit()
+
+        result = self.reader.traverse_graph({
+            "workspacePath": self.workspace,
+            "savedQuery": {
+                "id": "dispatch-eligible-work-v1",
+                "params": {"launchKeys": ["RELEASE-A"]},
+            },
+        })
+
+        self.assertEqual(
+            [node["id"] for node in result["nodes"]],
+            ["revision-advisory-absent", "revision-advisory-present"],
+        )
+        receipts = {receipt["itemId"]: receipt for receipt in result["receipts"]}
+        absent = receipts["revision-advisory-absent"]
+        self.assertEqual(absent["evidenceCompleteness"]["state"], "complete")
+        self.assertEqual(absent["exclusionReasons"], [])
+
+        present = receipts["revision-advisory-present"]
+        self.assertNotIn("packet-not-current-revision", present["exclusionReasons"])
+        self.assertNotIn("qa-evidence-revision-mismatch", present["exclusionReasons"])
+        for signal in (
+            "packetRevision",
+            "revisionCurrentness",
+            "qaEvidenceRevision",
+        ):
+            self.assertEqual(
+                present["signalPosture"][signal]["classification"],
+                "advisory",
+            )
+            self.assertEqual(
+                present["signalPosture"][signal]["disposition"],
+                "advisory",
+            )
+        self.assertEqual(present["signalPosture"]["packetRevision"]["value"], "revision-1")
+        self.assertEqual(present["signalPosture"]["qaEvidenceRevision"]["value"], "revision-3")
+        self.assertFalse(present["signalPosture"]["revisionCurrentness"]["value"])
+        self.assertEqual(
+            present["signalPosture"]["revisionCurrentness"]["source"],
+            {"kind": "logical", "signals": ["currentRevision", "isCurrentRevision"]},
+        )
+        self.assertIn(
+            "qa-not-passed",
+            receipts["revision-advisory-no-qa"]["exclusionReasons"],
+        )
+        self.assertIn(
+            "hold-not-clear",
+            receipts["revision-advisory-held"]["exclusionReasons"],
+        )
+        self.assertEqual(
+            result["query"]["dispatchPosture"]["signals"]["packetRevision"]["classification"],
+            "advisory",
+        )
+        self.assertEqual(len(result["query"]["dispatchPosture"]["fingerprint"]), 64)
+
     def test_dispatch_evidence_mapping_supports_normalized_relationship_sources(self) -> None:
         self._write_registry_override({
             "dispatchEvidence": {

@@ -2,9 +2,9 @@
 
 ## Validated release
 
-- Validation date: 2026-08-28
+- Validation date: 2026-09-13
 - Nimbalyst: 0.72.8 packaged build
-- Extension: Tracker+ 0.18.1
+- Extension: Tracker+ 0.18.2
 - Extension API: 1.0.0
 - Extension SDK: 0.3.0
 - Platform: Windows
@@ -53,11 +53,13 @@ result receipts. Workspace query changes do not require rebuilding the
 extension.
 
 Dispatch posture is a complete, versioned workspace override. Its closed
-signal/classification matrix preserves mandatory revision and QA gates while
-allowing supported operational evidence to be required, conditional,
+signal/classification matrix allows packet revision, revision currentness, and
+QA evidence revision to be required or advisory while QA status remains
+required. Supported operational evidence may be required, conditional,
 positive-blocking, or advisory. Invalid, incomplete, unknown, or ambiguous
 postures are rejected atomically. The effective posture and fingerprint appear
-in dispatch query and row receipts.
+in dispatch query and row receipts. Bundled defaults continue to require all
+three revision signals.
 
 Paginated traversal fitting accounts for the finalized page and validation
 metadata before accepting a response. Successful pages remain below the

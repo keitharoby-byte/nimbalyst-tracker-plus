@@ -6,7 +6,7 @@ readable tracker comments with a Gantt-style timeline, a normalized relationship
 graph, critical-path analysis, governance validation, and milestone reports.
 
 This is an independent community extension, not an official Nimbalyst feature.
-Version 0.18.1 is Windows-first and was validated with Nimbalyst 0.72.8. Because
+Version 0.18.2 is Windows-first and was validated with Nimbalyst 0.72.8. Because
 the read adapter uses a private SQLite schema, retest after upgrading Nimbalyst.
 
 The extension keeps its original technical ID so existing installations
@@ -21,7 +21,20 @@ upgrade in place despite the broader Tracker+ name.
   <img src="docs/screenshots/tracker-plus-midnight-orchid.png" width="49%" alt="Tracker+ 0.7 timeline viewer in a Nimbalyst dark theme">
 </p>
 
-## What's new in 0.18.1
+## What's new in 0.18.2
+
+Workspace dispatch policy can now make packet revision, revision currentness,
+and QA evidence revision advisory. Their values and trusted sources remain in
+detailed receipts, but missing or mismatched advisory revision evidence no
+longer blocks a row whose independent admission gates pass. The bundled policy
+still requires all three signals, so existing workspaces retain their current
+behavior until they opt in with a complete valid posture override.
+
+QA PASS, positive holds, supersession, hard dependencies, workflow/type,
+scope, conditional database routing, and query-wide fail-closed validation are
+unchanged.
+
+## Previously in 0.18.1
 
 Large dispatch results can now be retrieved completely with `paginate=true`.
 Follow each opaque `page.nextCursor` and aggregate `nodes`, `receipts`,

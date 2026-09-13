@@ -2020,21 +2020,28 @@ class NativeTrackerReader:
                     ),
                 }
             reasons: list[str] = []
-            if packet_revision is None:
+            if (
+                posture_signals["packetRevision"]["classification"] == "required"
+                and packet_revision is None
+            ):
                 reasons.append("packet-revision-missing")
-            if not (
-                is_current is True
-                or (
-                    packet_revision is not None
-                    and current_revision is not None
-                    and packet_revision == current_revision
+            if (
+                posture_signals["revisionCurrentness"]["classification"] == "required"
+                and not (
+                    is_current is True
+                    or (
+                        packet_revision is not None
+                        and current_revision is not None
+                        and packet_revision == current_revision
+                    )
                 )
             ):
                 reasons.append("packet-not-current-revision")
-            if qa_revision is None:
-                reasons.append("qa-evidence-revision-missing")
-            elif packet_revision is not None and qa_revision != packet_revision:
-                reasons.append("qa-evidence-revision-mismatch")
+            if posture_signals["qaEvidenceRevision"]["classification"] == "required":
+                if qa_revision is None:
+                    reasons.append("qa-evidence-revision-missing")
+                elif packet_revision is not None and qa_revision != packet_revision:
+                    reasons.append("qa-evidence-revision-mismatch")
             if str(qa_status or "").casefold() not in {
                 value.casefold() for value in policy["qaPassStatuses"]
             }:

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended for Tracker+ 0.18.1. This document describes only the
+Accepted; amended for Tracker+ 0.18.2. This document describes only the
 extension's public, workspace-neutral architecture. Installation-specific
 workflow, role, launch, route, dispatch policy, and saved queries belong in
 external JSON configuration.
@@ -149,10 +149,12 @@ member filters allow `eq`, `in`, and `exists`; comparisons are parameterized
 and case-insensitive, and returned values are length-bounded. It does not add a
 write capability or broaden traversal topology.
 
-Dispatch posture has a closed signal/classification matrix. Revision and QA
-signals remain required; supported operational signals may be required,
+Dispatch posture has a closed signal/classification matrix. Packet revision,
+revision currentness, and QA evidence revision may be required or advisory;
+QA status remains required. Supported operational signals may be required,
 positive-blocking, advisory, or conditionally required only where declared by
-the registry contract. The database route condition consumes the explicit
+the registry contract. The bundled posture keeps revision evidence required
+for backward compatibility. The database route condition consumes the explicit
 boolean `databaseBearing` evidence signal and never infers intent from titles,
 tags, types, or other near-name fields. Invalid or incomplete posture
 overrides are rejected atomically. Effective posture, exact source/value

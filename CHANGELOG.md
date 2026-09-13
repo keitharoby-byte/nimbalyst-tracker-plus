@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.18.2 - 2026-09-13
+
+- Allow workspace dispatch posture to classify `packetRevision`,
+  `revisionCurrentness`, and `qaEvidenceRevision` as advisory. Missing or
+  mismatched advisory revision evidence remains visible with provenance but no
+  longer excludes an otherwise eligible row. (#49)
+- Keep the bundled posture backward compatible: revision evidence remains
+  required unless a complete, valid workspace override explicitly changes it.
+  QA pass, positive holds, supersession, hard dependencies, scope, and other
+  independent admission gates remain enforced.
+
 ## 0.18.1 - 2026-08-28
 
 - Add byte-fitted, cursor-bound pagination to dispatch traversal while keeping

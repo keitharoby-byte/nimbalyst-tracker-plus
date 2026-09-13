@@ -48,10 +48,11 @@ backends disabled until the user approves their first-use native-code prompts.
   response.
 - Dispatch posture overrides use a closed signal/classification matrix and
   replace the complete versioned posture atomically. Packet revision,
-  currentness, QA revision, and QA status cannot be downgraded. Conditional
-  database routing depends only on the explicit boolean `databaseBearing`
-  evidence signal; advisory values retain their trusted source and disposition
-  in receipts without affecting admission.
+  currentness, and QA revision may be made advisory while QA status remains a
+  required admission gate. Missing or mismatched advisory revision evidence
+  retains its trusted source and disposition in receipts without affecting
+  admission. Conditional database routing depends only on the explicit boolean
+  `databaseBearing` evidence signal.
 - Comment bodies are capped at 20,000 Unicode characters. Tracker bodies are
   capped at 100,000 characters. Each serialized result page is capped below the
   512-KiB process-line ceiling. Paginated traversal fitting includes finalized
